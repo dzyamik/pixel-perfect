@@ -4,4 +4,5 @@
 export { ChunkedBitmap } from './ChunkedBitmap.js';
 export type { ChunkedBitmapOptions } from './ChunkedBitmap.js';
 export { MaterialRegistry } from './Materials.js';
+export * as Carve from './ops/Carve.js';
 export type { Chunk, Contour, HitResult, Material, Point } from './types.js';

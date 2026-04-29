@@ -6,13 +6,14 @@
 
 Alpha. Under active development. APIs may change before v1.0.0.
 
-**Currently implemented (Phase 1, Week 1):**
+**Currently implemented (Phase 1, Weeks 1–2):**
 
 - `src/core/types.ts` — shared types: `Point`, `Material`, `Contour`, `Chunk`, `HitResult`.
 - `src/core/Materials.ts` — `MaterialRegistry` (id-validated material lookup).
 - `src/core/ChunkedBitmap.ts` — chunked byte grid, dirty tracking, pixel I/O, coordinate conversion.
+- `src/core/ops/Carve.ts` — `circle(bitmap, cx, cy, radius)`. Sub-pixel center coords supported; bounding box auto-clipped; non-positive / NaN radii are no-ops.
 
-**Not yet implemented:** carve / deposit ops, marching squares, Douglas-Peucker, flood fill, spatial queries, the Box2D adapter, the Phaser plugin, `DestructibleTerrain` GameObject, `PixelPerfectSprite`. See `docs-dev/02-roadmap.md` for the build sequence.
+**Not yet implemented:** `Carve.polygon`, `Carve.fromAlphaTexture`, `Deposit.*`, marching squares, Douglas-Peucker, flood fill, spatial queries, the Box2D adapter, the Phaser plugin, `DestructibleTerrain` GameObject, `PixelPerfectSprite`. See `docs-dev/02-roadmap.md` for the build sequence.
 
 ## When to use this skill
 
@@ -150,6 +151,10 @@ Coordinate-conversion helpers.
 ### `new MaterialRegistry(materials?)` / `registry.register(material)` / `registry.get(id)` / `registry.getOrThrow(id)`
 
 Material lookup. Ids must be integers in `1..255` (id 0 is reserved for air).
+
+### `Carve.circle(bitmap, cx, cy, radius) → void`
+
+Sets every cell within `radius` of `(cx, cy)` to air. Cells at exactly `radius` are included (`dx² + dy² ≤ r²`). Sub-pixel `cx`/`cy` are allowed. The bounding box is clipped to bitmap bounds; circles that fall entirely outside are silent no-ops. `radius ≤ 0` and `NaN` are no-ops.
 
 ## Public API (target shape, post-Phase-3)
 
