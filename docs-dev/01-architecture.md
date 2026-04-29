@@ -61,7 +61,7 @@ Chunk size: 128 × 128 pixels (configurable)
 Grid: 32 × 8 chunks = 256 chunks
 ```
 
-Per-chunk state:
+Per-chunk state (core type):
 
 ```ts
 interface Chunk {
@@ -71,9 +71,12 @@ interface Chunk {
   dirty: boolean;              // contour/collider rebuild needed
   visualDirty: boolean;        // GPU texture upload needed
   contours: Contour[] | null;  // cached marching-squares output
-  bodyIds: BodyId[];           // current Box2D bodies for this chunk
 }
 ```
+
+Box2D body ids are **not** stored on the core `Chunk` type. Keeping `BodyId`
+out of the core layer preserves the dependency-free rule (Rule 1 in
+`CLAUDE.md`); the Box2D adapter owns its own `Map<Chunk, BodyId[]>` instead.
 
 Why chunked:
 
@@ -182,7 +185,7 @@ These are microsecond operations and replace dozens of Box2D queries that game l
 
 ### Box2DAdapter
 
-Owns the lifecycle of all terrain Box2D bodies. Each chunk has zero or more `b2ChainShape` bodies attached to a single static `b2Body` for that chunk.
+Owns the lifecycle of all terrain Box2D bodies. Each chunk has zero or more `b2ChainShape` bodies attached to a single static `b2Body` for that chunk. The adapter maintains an internal `Map<Chunk, BodyId[]>`; the core `Chunk` type does not carry body ids.
 
 Key API:
 
