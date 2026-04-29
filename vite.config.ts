@@ -16,6 +16,10 @@ const exampleEntries = Object.fromEntries(
 export default defineConfig({
     root: 'examples',
     publicDir: resolve(__dirname, 'examples/_public'),
+    // Relative asset paths so the built site can be served from any
+    // sub-path (root, /pixel-perfect/ on GitHub Pages, file://, etc.)
+    // without changing the config.
+    base: './',
     resolve: {
         alias: {
             '@': resolve(__dirname, 'src'),
@@ -25,7 +29,11 @@ export default defineConfig({
         },
     },
     build: {
-        outDir: resolve(__dirname, 'dist-examples'),
+        // Builds are committed to the repo as the deployable demo site.
+        // No CI; run `npm run build` manually before committing demo
+        // changes you want to publish.
+        outDir: resolve(__dirname, 'docs'),
+        emptyOutDir: true,
         rollupOptions: {
             input: {
                 index: resolve(__dirname, 'examples/index.html'),

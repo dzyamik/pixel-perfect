@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) loosely; this project does not yet publish to npm.
 
+## Unreleased — Phase 3 (in progress)
+
+- `src/phaser/` — `TerrainRenderer` (per-chunk canvas-backed visuals), `DestructibleTerrain` composite GameObject with optional Box2D physics integration. The `chunk.contours` field is now populated on rebuild so debug renderers can read live colliders.
+- Three runnable demos under `examples/`: basic rendering, click to carve, physics with falling balls + collider debug overlay.
+- Demo deployment workflow: Vite builds into `docs/` (committed). No CI; run `npm run build` manually before pushing demo changes you want published. The vite config uses `base: './'` so the output works at any URL prefix (root, `/pixel-perfect/`, `file://`, etc.).
+- `.gitignore` cleaned up: removed obsolete `dist-examples/` (no longer used) and `docs/site/` / `docs/api/` (VitePress / TypeDoc not yet wired up).
+
+---
+
 ## [v0.2.5] — 2026-04-29
 
 Phase 2.5: cross-chunk contour stitching. Removes the v0.2.0 limitation that constrained terrain colliders to chunk-sized blobs.

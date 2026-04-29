@@ -47,6 +47,18 @@ Tooling: `docs-dev/03-tooling.md`.
 - After significant changes: `npm run typecheck && npm test && npm run lint`.
 - If you change architecture, update `docs-dev/01-architecture.md` in the same commit.
 
+## Demo build deployment (no CI)
+
+The `docs/` folder is the deployed demo site (committed to the repo).
+There is no CI; demo deployment is manual:
+
+1. Make demo changes under `examples/`.
+2. Run `npm run build` — Vite outputs into `docs/`.
+3. `git add docs && git commit` alongside the source changes.
+
+Don't push demo source changes without an updated `docs/` build, or
+the public site will lag behind the source.
+
 ## Phaser v4 specifics
 
 - Use Phaser v4 APIs only. v3 patterns (Pipelines, FX/Masks separate from Filters) are removed.

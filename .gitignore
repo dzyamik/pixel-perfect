@@ -2,10 +2,10 @@
 node_modules/
 
 # Build outputs
+# `dist/` holds the TypeScript library build (tsc); not published yet,
+# so it is .gitignored. `docs/` holds the Vite demo build and IS
+# committed — that is how the demos are deployed.
 dist/
-dist-examples/
-docs/site/
-docs/api/
 
 # Test coverage
 coverage/

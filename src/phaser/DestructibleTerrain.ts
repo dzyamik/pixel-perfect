@@ -1,16 +1,11 @@
 import type Phaser from 'phaser';
-import {
-    Carve,
-    ChunkedBitmap,
-    Deposit,
-    MaterialRegistry,
-    Spatial,
-} from '../core/index.js';
+import { Carve, ChunkedBitmap, Deposit, Spatial } from '../core/index.js';
 import type {
     AlphaSource,
-    Material,
-    Point,
     HitResult,
+    Material,
+    MaterialRegistry,
+    Point,
 } from '../core/index.js';
 import { Box2DAdapter, DeferredRebuildQueue } from '../physics/index.js';
 import type { WorldId } from '../physics/index.js';

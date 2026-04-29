@@ -337,6 +337,17 @@ https://github.com/dzyamik/pixel-perfect/issues
 
 Include: Phaser version, Phaser Box2D version, repro steps, and ideally a minimal reproduction. The maintainer (dzyamik) is solo; clear repros get fixed faster.
 
+## Building the demos
+
+The `examples/` folder holds runnable Phaser-based demo scenes. They are built into `docs/` (committed) and served as a static site. There is no CI / automated deployment:
+
+```bash
+npm run dev      # local dev server (http://localhost:5173/)
+npm run build    # writes docs/ for deploy + commit
+```
+
+Treat `docs/` like generated source: re-run `npm run build` and commit before pushing demo changes you want public.
+
 ## License
 
 MIT.
