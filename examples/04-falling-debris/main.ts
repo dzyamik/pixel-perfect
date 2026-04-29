@@ -1,30 +1,33 @@
 /**
  * Demo 04 — falling debris.
  *
- * Carve through anchored terrain to detach pieces; the detached pieces
+ * Carve through anchored terrain to detach pieces; detached pieces
  * become dynamic Box2D bodies and fall under gravity.
  *
  *   left mouse  → carve (continuous on drag)
  *   right mouse → deposit dirt
  *   wheel       → resize brush
  *   D           → toggle collider debug overlay
- *   X           → extract debris NOW (also runs automatically when
- *                 you stop carving — pointerup)
  *   R           → reset terrain + clear all debris
  *
  * Initial state: a wide flat ground anchored to the bottom row, plus
- * three "shelves" attached to it via thin necks. Carving the necks
- * detaches the shelves and they fall.
+ * three "shelves" attached to it via thin necks. There is also one
+ * pre-floating brick at the top — it is detached from frame 1, so it
+ * should fall immediately on load (this proves the
+ * detect → enqueue → body creation pipeline runs even without a
+ * user-initiated carve).
+ *
+ * `extractDebris` runs every frame, so as soon as a carve severs a
+ * neck the attached shelf detaches in the same frame.
  *
  * Visual check:
- *  - Carve through one of the necks. The shelf above should detach
- *    and fall as a single rigid piece.
- *  - The detached piece's outline (rendered as a Phaser Graphics path)
- *    should rotate naturally under gravity.
- *  - Carving the falling piece itself does NOT split it — it's a
- *    dynamic body now and lives outside the static terrain bitmap.
- *  - With debug overlay on, you should see the green chain outlining
- *    only the static (anchored) terrain — never the debris.
+ *  - On load, the floating brick at top falls onto the ground.
+ *  - Carve through one of the necks. The shelf above detaches and
+ *    falls as a single rigid piece.
+ *  - The detached piece's outline (rendered as a Phaser Graphics)
+ *    rotates naturally under gravity.
+ *  - With debug on, the green chain outlines only the static
+ *    (anchored) terrain — never the debris.
  */
 
 import * as Phaser from 'phaser';
@@ -130,9 +133,6 @@ class FallingDebrisScene extends Phaser.Scene {
             this.cursor.strokeCircle(pointer.worldX, pointer.worldY, this.brushRadius);
             carveOrDeposit(pointer);
         });
-        // After every drag-carve, run debris extraction.
-        this.input.on('pointerup', () => this.extractDebris());
-
         this.input.on(
             'wheel',
             (
@@ -149,7 +149,6 @@ class FallingDebrisScene extends Phaser.Scene {
             },
         );
 
-        this.input.keyboard?.on('keydown-X', () => this.extractDebris());
         this.input.keyboard?.on('keydown-D', () => {
             this.debugOn = !this.debugOn;
             if (!this.debugOn) this.debug.clear();
@@ -157,24 +156,22 @@ class FallingDebrisScene extends Phaser.Scene {
         this.input.keyboard?.on('keydown-R', () => {
             this.regenerateTerrain();
             this.clearDebris();
-            // After regeneration the floating shelves need to be promoted
-            // to debris on the next frame.
-            this.time.delayedCall(0, () => this.extractDebris());
         });
 
         this.stats = attachStats(this);
         showHint(
             this,
-            'carve through the necks → shelves detach and fall · X to extract · D debug · R reset',
+            'carve through the necks → shelves detach and fall · D debug · R reset',
             7000,
         );
-
-        // First-frame extraction: nothing detached yet (the shelves are
-        // anchored), so this is a no-op in the initial state.
-        this.time.delayedCall(0, () => this.extractDebris());
     }
 
     override update(_time: number, deltaMs: number): void {
+        // Run debris extraction every frame so detachments register the
+        // moment a carve severs a connection (no waiting for pointerup).
+        // Detect is O(width × height); cheap for our 512×256 bitmap.
+        this.extractDebris();
+
         b2.WorldStep({ worldId: this.worldId, deltaTime: deltaMs / 1000 });
 
         // Sync each debris's Graphics to its body's position + rotation.
@@ -204,10 +201,28 @@ class FallingDebrisScene extends Phaser.Scene {
     }
 
     private extractDebris(): void {
-        // Side-effecting call: removes detached cells from the bitmap and
-        // queues dynamic bodies for them. The onDebrisCreated callback
-        // (registered at construction) fires once per body created.
-        this.terrain.extractDebris();
+        // Side-effecting: detach any unanchored cells and queue dynamic
+        // bodies for them. The onDebrisCreated callback (registered at
+        // construction) fires once per body created.
+        const detected = this.terrain.extractDebris();
+        if (detected.length > 0) {
+            // Diagnostic: log the detection so we can correlate "I clicked
+            // here" with "this island appeared". Open the dev tools console
+            // to see it.
+            // eslint-disable-next-line no-console
+            console.log(
+                '[debris]',
+                detected.map((info) => ({
+                    cells: info.island.cells.length,
+                    bounds: info.island.bounds,
+                    contours: info.contours.map((c) => ({
+                        verts: c.points.length,
+                        closed: c.closed,
+                    })),
+                    materialId: info.dominantMaterial,
+                })),
+            );
+        }
     }
 
     private spawnDebrisVisual(
@@ -234,7 +249,7 @@ class FallingDebrisScene extends Phaser.Scene {
 
         const g = this.add.graphics().setDepth(50);
         g.fillStyle(material.color, 1);
-        g.lineStyle(1, 0x000000, 0.4);
+        g.lineStyle(1, 0xffffff, 0.5);
         g.beginPath();
         const first = localPoints[0]!;
         g.moveTo(first.x, first.y);
@@ -244,6 +259,17 @@ class FallingDebrisScene extends Phaser.Scene {
         g.closePath();
         g.fillPath();
         g.strokePath();
+
+        // eslint-disable-next-line no-console
+        console.log(
+            '[body]',
+            'verts:',
+            contour.points.length,
+            'centroid:',
+            { x: cx, y: cy },
+            'closed:',
+            contour.closed,
+        );
 
         this.debris.push({ bodyId, graphics: g });
     }
@@ -280,8 +306,10 @@ class FallingDebrisScene extends Phaser.Scene {
     }
 
     /**
-     * Builds an anchored ground plus three shelves attached to it via
-     * thin neck columns. Carving the necks detaches the shelves.
+     * Builds: an anchored ground, three neck-supported shelves, plus
+     * one floating brick at the top that is detached from frame 1.
+     * The floating brick is the no-carve test of the debris pipeline —
+     * it should fall on first update().
      */
     private regenerateTerrain(): void {
         const bm = this.terrain.bitmap;
@@ -298,12 +326,11 @@ class FallingDebrisScene extends Phaser.Scene {
         }
         // Three shelves with thin neck supports.
         const shelves = [
-            { x: 60, w: 80, neckW: 4, neckH: 60, shelfW: 100, shelfH: 16 },
-            { x: 220, w: 80, neckW: 4, neckH: 100, shelfW: 120, shelfH: 16 },
-            { x: 380, w: 80, neckW: 4, neckH: 80, shelfW: 100, shelfH: 16 },
+            { x: 60, neckW: 4, neckH: 60, shelfW: 100, shelfH: 16 },
+            { x: 220, neckW: 4, neckH: 100, shelfW: 120, shelfH: 16 },
+            { x: 380, neckW: 4, neckH: 80, shelfW: 100, shelfH: 16 },
         ];
         for (const s of shelves) {
-            // Neck (thin column from ground up).
             const neckX = s.x + s.shelfW / 2 - s.neckW / 2;
             const neckYTop = HEIGHT - 24 - s.neckH;
             for (let yy = neckYTop; yy < HEIGHT - 24; yy++) {
@@ -311,12 +338,17 @@ class FallingDebrisScene extends Phaser.Scene {
                     bm.setPixel(xx, yy, 1);
                 }
             }
-            // Shelf (sits on top of the neck).
             const shelfY = neckYTop - s.shelfH;
             for (let yy = shelfY; yy < neckYTop; yy++) {
                 for (let xx = s.x; xx < s.x + s.shelfW; xx++) {
                     bm.setPixel(xx, yy, 1);
                 }
+            }
+        }
+        // Floating brick (no support — detached from frame 1).
+        for (let yy = 20; yy < 36; yy++) {
+            for (let xx = 240; xx < 280; xx++) {
+                bm.setPixel(xx, yy, 1);
             }
         }
     }
