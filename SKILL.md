@@ -6,7 +6,7 @@
 
 Alpha. Under active development. APIs may change before v1.0.0.
 
-**Currently implemented — Phase 1 complete (`v0.1.0` candidate):**
+**Currently implemented — Phase 1 + 2 complete (`v0.2.0`):**
 
 - `src/core/types.ts` — shared types: `Point`, `Material`, `Contour`, `Chunk`, `HitResult`.
 - `src/core/Materials.ts` — `MaterialRegistry` (id-validated material lookup).
@@ -17,9 +17,13 @@ Alpha. Under active development. APIs may change before v1.0.0.
 - `src/core/algorithms/FloodFill.ts` — `findIslands(bitmap, anchor)` returns connected components of solid cells that are not reachable from the anchor set. Anchor strategies: `bottomRow` and `customPoints`. 4-connected BFS; out-of-bounds and air anchors are silent no-ops; islands carry `cells: Point[]` plus a tight `bounds` rect. Two-pass algorithm: first pass marks anchored cells, second pass collects unanchored solid components.
 - `src/core/queries/Spatial.ts` — `isSolid`, `sampleMaterial`, `surfaceY`, `findGroundBelow`, `raycast` (Bresenham). All read directly from the bitmap; out-of-world coordinates are treated as air.
 
-**Phase 1 of `docs-dev/02-roadmap.md` is complete: ChunkedBitmap, Materials, Carve / Deposit (circle / polygon / fromAlphaTexture), MarchingSquares, DouglasPeucker, FloodFill, Spatial queries.**
+**Phase 1 (`v0.1.0`) — `src/core/`:** ChunkedBitmap, Materials, Carve / Deposit (circle / polygon / fromAlphaTexture), MarchingSquares, DouglasPeucker, FloodFill, Spatial queries.
 
-**Not yet implemented (Phase 2+):** the Box2D adapter (`src/physics/`), the Phaser plugin and `DestructibleTerrain` GameObject (`src/phaser/`), `PixelPerfectSprite`. See `docs-dev/02-roadmap.md` for the build sequence.
+**Phase 2 (`v0.2.0`) — `src/physics/`:** typed `phaser-box2d` binding, `ContourToBody` (chain + polygon), `Box2DAdapter` (per-chunk static terrain bodies + dynamic debris), `DeferredRebuildQueue` (end-of-frame body churn with `perFrameBudget`), `DebrisDetector` (FloodFill + contour extraction).
+
+> **Phase 2 limitation:** per-chunk marching squares produces open polylines for contours that span multiple chunks. Box2D's open chain needs ≥ 4 vertices, but a typical cross-chunk fragment simplifies to 2–3. Practical consequence: per-chunk colliders are reliable for destructible *islands* up to roughly chunk-size; larger blobs need cross-chunk contour stitching, deferred to v1.1.
+
+**Not yet implemented (Phase 3+):** the Phaser plugin, `DestructibleTerrain` GameObject, `PixelPerfectSprite`, `DynamicTexture` chunk renderer. See `docs-dev/02-roadmap.md` for the build sequence.
 
 ## When to use this skill
 

@@ -68,6 +68,23 @@ interface PendingDebris {
  * insertion order. This matches `ChunkedBitmap.forEachDirtyChunk`'s
  * iteration and keeps best-effort determinism for replay debugging
  * (architecture doc § Determinism).
+ *
+ * Phase 2 limitation — cross-chunk contour stitching
+ * --------------------------------------------------
+ * Per-chunk marching-squares output produces *closed* contours when a
+ * solid blob fits inside the chunk plus its 1-pixel padding, and *open*
+ * polylines when a blob spans multiple chunks. Box2D requires at least
+ * 4 vertices for an open chain shape (ghost-vertex handling); after
+ * Douglas-Peucker simplification, a typical cross-chunk fragment
+ * collapses to 2–3 vertices and is silently dropped.
+ *
+ * The practical consequence: per-chunk colliders are reliable for
+ * destructible *islands* up to roughly chunk-size in extent. Larger
+ * blobs need cross-chunk stitching — extracting a global contour for
+ * each connected solid component and routing it to a single chunk's
+ * body. This is deliberately deferred to v1.1; the
+ * `tests/integration/Phase2Pipeline.test.ts` smoke uses single-chunk
+ * worlds to stay within the supported regime.
  */
 export class DeferredRebuildQueue {
     private readonly bitmap: ChunkedBitmap;
