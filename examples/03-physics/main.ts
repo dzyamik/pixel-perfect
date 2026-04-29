@@ -185,8 +185,17 @@ class PhysicsScene extends Phaser.Scene {
     }
 
     override update(_time: number, deltaMs: number): void {
-        // Step the world. Phaser-box2d's WorldStep auto-amortizes, so
-        // pass deltaMs/1000 directly.
+        // IMPORTANT: terrain rebuilds run BEFORE the world step. If we
+        // stepped first, a body destroyed by the rebuild would lose its
+        // contacts, and any dynamic body that was resting on it would
+        // be in free-fall for one frame; the next step's narrow-phase
+        // could then find the dynamic body penetrating the new chain
+        // shape from the wrong side and let it tunnel through. Doing
+        // the rebuild first guarantees the step always sees fresh
+        // bodies + the dynamic-body positions Box2D last knew about,
+        // so contact resolution stays clean.
+        this.terrain.update();
+
         b2.WorldStep({ worldId: this.worldId, deltaTime: deltaMs / 1000 });
 
         // Sync ball sprite transforms with their bodies.
@@ -194,12 +203,9 @@ class PhysicsScene extends Phaser.Scene {
             const pos = b2.b2Body_GetPosition(ball.bodyId);
             const rot = b2.b2Body_GetRotation(ball.bodyId);
             ball.image.x = pos.x * PIXELS_PER_METER;
-            ball.image.y = -pos.y * PIXELS_PER_METER; // y-flip: Box2D y-up → screen y-down
+            ball.image.y = -pos.y * PIXELS_PER_METER;
             ball.image.rotation = -Math.atan2(rot.s, rot.c);
         }
-
-        // Flush queue + repaint chunks.
-        this.terrain.update();
 
         if (this.debugOn) this.drawDebug();
         this.stats.update({

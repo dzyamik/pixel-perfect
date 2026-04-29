@@ -137,7 +137,10 @@ export class DeferredRebuildQueue {
         }
     }
 
-    private rebuildTerrain(adapter: Box2DAdapter, onChunkRebuilt?: (chunk: Chunk) => void): void {
+    private rebuildTerrain(
+        adapter: Box2DAdapter,
+        onChunkRebuilt?: (chunk: Chunk) => void,
+    ): void {
         // Identify every connected solid component in the bitmap, extract
         // its closed contours, and route each component to a deterministic
         // representative chunk (the chunk containing its lex-smallest
@@ -187,12 +190,20 @@ export class DeferredRebuildQueue {
         // (eases replay debugging and gives onChunkRebuilt a stable
         // sequence). Also populate chunk.contours so debug renderers
         // and consumers that want to inspect the collider shape can.
+        //
+        // For each rep, skip the rebuild entirely if the contour set is
+        // bit-identical to last frame's. This is the common case during
+        // continuous-drag carving on multi-blob terrain — most blobs
+        // don't change frame to frame, and rebuilding them anyway
+        // destroys+rebuilds chains, briefly removing contact support
+        // for any dynamic body resting on them.
         const repsSorted = [...newAssignments.keys()].sort((a, b) => {
             if (a.cy !== b.cy) return a.cy - b.cy;
             return a.cx - b.cx;
         });
         for (const chunk of repsSorted) {
             const contours = newAssignments.get(chunk)!;
+            if (contoursEqual(chunk.contours, contours)) continue;
             adapter.rebuildChunk(chunk, contours);
             chunk.contours = contours;
             onChunkRebuilt?.(chunk);
@@ -206,4 +217,34 @@ export class DeferredRebuildQueue {
         }
         this.dirtyChunks.clear();
     }
+}
+
+/**
+ * Bit-equality on a contour list. Used to skip a chunk's collider
+ * rebuild when its outline hasn't changed across frames — see
+ * {@link DeferredRebuildQueue#rebuildTerrain}.
+ *
+ * Both list ordering and per-vertex coordinates must match exactly.
+ * `componentToContours` is deterministic (it builds a temp bitmap and
+ * runs marching squares + DP with fixed parameters), so two extractions
+ * of the same component produce bit-identical results.
+ */
+function contoursEqual(
+    a: readonly Contour[] | null,
+    b: readonly Contour[],
+): boolean {
+    if (a === null) return false;
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+        const ai = a[i]!;
+        const bi = b[i]!;
+        if (ai.closed !== bi.closed) return false;
+        if (ai.points.length !== bi.points.length) return false;
+        for (let j = 0; j < ai.points.length; j++) {
+            const ap = ai.points[j]!;
+            const bp = bi.points[j]!;
+            if (ap.x !== bp.x || ap.y !== bp.y) return false;
+        }
+    }
+    return true;
 }

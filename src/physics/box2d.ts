@@ -74,6 +74,7 @@ export const b2Body_IsValid: (bodyId: BodyId) => boolean = r.b2Body_IsValid;
 
 export const b2DefaultChainDef: () => ChainDef = r.b2DefaultChainDef;
 export const b2CreateChain: (bodyId: BodyId, def: ChainDef) => ChainId = r.b2CreateChain;
+export const b2DestroyChain: (chainId: ChainId) => void = r.b2DestroyChain;
 
 export const b2DefaultShapeDef: () => ShapeDef = r.b2DefaultShapeDef;
 export const b2CreatePolygonShape: (

@@ -172,6 +172,12 @@ class FallingDebrisScene extends Phaser.Scene {
         // Detect is O(width × height); cheap for our 512×256 bitmap.
         this.extractDebris();
 
+        // IMPORTANT: terrain rebuilds run BEFORE the world step (see the
+        // matching comment in demo 03). The step sees fresh static
+        // bodies, so balls and debris resting on the terrain don't
+        // tunnel through during a destroy/recreate cycle.
+        this.terrain.update();
+
         b2.WorldStep({ worldId: this.worldId, deltaTime: deltaMs / 1000 });
 
         // Sync each debris's Graphics to its body's position + rotation.
@@ -190,8 +196,6 @@ class FallingDebrisScene extends Phaser.Scene {
                 this.debris.splice(i, 1);
             }
         }
-
-        this.terrain.update();
 
         if (this.debugOn) this.drawDebug();
         this.stats.update({

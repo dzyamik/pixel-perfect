@@ -78,6 +78,14 @@ export class Box2DAdapter {
      * insufficient-vertex chains (closed < 3, open < 4) are silently
      * skipped. If no contour was valid, no body is created and the map
      * entry is cleared.
+     *
+     * Note: persistent-body / chain-only-swap is not viable with
+     * `phaser-box2d` 1.1 — its `b2DestroyChain` doesn't unlink the
+     * chain from the body's chain list, so a subsequent `b2DestroyBody`
+     * double-frees the chain pool. We destroy and recreate the whole
+     * body. The {@link DeferredRebuildQueue} skips this rebuild when
+     * the contour set is unchanged across frames, which keeps churn
+     * down for terrain blobs unaffected by a given carve.
      */
     rebuildChunk(chunk: Chunk, contours: readonly Contour[]): void {
         const existing = this.chunkBodies.get(chunk);
@@ -104,8 +112,6 @@ export class Box2DAdapter {
         }
 
         if (attached === 0) {
-            // Every contour was rejected (e.g., all degenerate); leave the
-            // body slot clean.
             b2DestroyBody(bodyId);
             return;
         }
