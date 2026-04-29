@@ -13,8 +13,9 @@ Alpha. Under active development. APIs may change before v1.0.0.
 - `src/core/ChunkedBitmap.ts` — chunked byte grid, dirty tracking, pixel I/O, coordinate conversion.
 - `src/core/ops/Carve.ts` and `src/core/ops/Deposit.ts` — `circle(...)` and `polygon(...)`. Carve writes 0 (air); Deposit writes a caller-supplied material id. Same rasterizer underneath (`src/core/ops/raster.ts`). Sub-pixel coords supported; bounding box auto-clipped; degenerate inputs (radius ≤ 0, < 3 polygon vertices) are no-ops. Polygons use the even-odd fill rule, so self-intersecting shapes are handled correctly.
 - `src/core/algorithms/MarchingSquares.ts` — `extract(chunk, bitmap)` returns the per-chunk contour polygons in world coords. 1-pixel padding from neighbor chunks; saddle-point convention "TL-BR diagonal joined" is applied uniformly. Closed contours are emitted with `closed: true`; contours that pass through a chunk boundary come back as open chains for the physics adapter to stitch in Phase 2.
+- `src/core/algorithms/DouglasPeucker.ts` — `simplify(contour, epsilon)` reduces vertex count using Ramer-Douglas-Peucker. Closed contours are split at the vertex farthest from `points[0]` so each half has stable endpoints. Refuses to degenerate a closed contour below 3 vertices. Iterative (no recursion stack risk on long contours). Typical reduction: ≥ 80% on circle contours with `epsilon ≈ 1.0` pixel.
 
-**Not yet implemented:** `Carve.fromAlphaTexture`, Douglas-Peucker, flood fill, spatial queries, the Box2D adapter, the Phaser plugin, `DestructibleTerrain` GameObject, `PixelPerfectSprite`. See `docs-dev/02-roadmap.md` for the build sequence.
+**Not yet implemented:** `Carve.fromAlphaTexture`, flood fill, spatial queries, the Box2D adapter, the Phaser plugin, `DestructibleTerrain` GameObject, `PixelPerfectSprite`. See `docs-dev/02-roadmap.md` for the build sequence.
 
 ## When to use this skill
 
@@ -168,6 +169,10 @@ Same shapes and clipping as `Carve.*`, but writes `materialId` instead of air. T
 ### `MarchingSquares.extract(chunk, bitmap) → Contour[]`
 
 Extracts contour polygons from one chunk. Output vertices are in world coordinates at half-integer positions (cell-edge midpoints). Saddle cells use the TL-BR-joined convention uniformly so adjacent chunks produce topologically consistent stitching. Each contour reports `closed: true` if the polyline closes within the chunk's padded sample window, or `closed: false` if it extends across a chunk boundary — the physics adapter is responsible for joining open chains across chunks. Walks each segment with solid on the visual-LEFT side, so closed solid blobs walk visually-clockwise (math-CCW in y-down).
+
+### `DouglasPeucker.simplify(contour, epsilon) → Contour`
+
+Reduces a polyline's vertex count by removing interior points within `epsilon` of the chord between their kept neighbors. Endpoints are always preserved. For closed contours, the input is split at the vertex farthest from `points[0]` so each half is simplified as a well-anchored open polyline; the closure is restored before return. The algorithm refuses to reduce a closed contour below 3 vertices — degenerate inputs are returned unchanged so consumers can keep treating the result as a polygon. Use `epsilon ≈ 1.0` pixel for default destructible-terrain output; circle contours typically reduce by ≥ 80%.
 
 ## Public API (target shape, post-Phase-3)
 
