@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ChunkedBitmap } from '../../../src/core/ChunkedBitmap.js';
 import * as Carve from '../../../src/core/ops/Carve.js';
+import type { Point } from '../../../src/core/types.js';
 
 /** Fills the entire bitmap with a single material id (used as a setup helper). */
 function fillSolid(bitmap: ChunkedBitmap, materialId: number): void {
@@ -161,6 +162,187 @@ describe('Carve.circle', () => {
                 expect(chunk.dirty).toBe(false);
                 expect(chunk.visualDirty).toBe(false);
             }
+        });
+    });
+});
+
+describe('Carve.polygon', () => {
+    let bitmap: ChunkedBitmap;
+
+    beforeEach(() => {
+        bitmap = new ChunkedBitmap({ width: 64, height: 64, chunkSize: 32 });
+    });
+
+    describe('basic shape', () => {
+        it('carves a square interior', () => {
+            fillSolid(bitmap, 1);
+            const square: Point[] = [
+                { x: 10, y: 10 },
+                { x: 20, y: 10 },
+                { x: 20, y: 20 },
+                { x: 10, y: 20 },
+            ];
+            Carve.polygon(bitmap, square);
+
+            // Cells well inside the square are carved.
+            expect(bitmap.getPixel(15, 15)).toBe(0);
+            expect(bitmap.getPixel(11, 11)).toBe(0);
+            // Cells outside are untouched.
+            expect(bitmap.getPixel(9, 15)).toBe(1);
+            expect(bitmap.getPixel(21, 15)).toBe(1);
+            expect(bitmap.getPixel(15, 9)).toBe(1);
+            expect(bitmap.getPixel(15, 21)).toBe(1);
+        });
+
+        it('carves a triangle', () => {
+            fillSolid(bitmap, 1);
+            const triangle: Point[] = [
+                { x: 10, y: 10 },
+                { x: 30, y: 10 },
+                { x: 20, y: 30 },
+            ];
+            Carve.polygon(bitmap, triangle);
+
+            // Centroid-ish cell is carved.
+            expect(bitmap.getPixel(20, 15)).toBe(0);
+            // Cell outside the triangle on the far side is intact.
+            expect(bitmap.getPixel(20, 31)).toBe(1);
+            expect(bitmap.getPixel(5, 15)).toBe(1);
+        });
+
+        it('carves a concave (L-shape) polygon correctly', () => {
+            fillSolid(bitmap, 1);
+            const L: Point[] = [
+                { x: 10, y: 10 },
+                { x: 30, y: 10 },
+                { x: 30, y: 20 },
+                { x: 20, y: 20 },
+                { x: 20, y: 30 },
+                { x: 10, y: 30 },
+            ];
+            Carve.polygon(bitmap, L);
+
+            // Inside the L's interior.
+            expect(bitmap.getPixel(15, 15)).toBe(0);
+            expect(bitmap.getPixel(15, 25)).toBe(0);
+            expect(bitmap.getPixel(25, 15)).toBe(0);
+            // The "notch" of the L (top-right of the missing square) is air-untouched.
+            expect(bitmap.getPixel(25, 25)).toBe(1);
+        });
+
+        it('handles self-intersecting polygons via even-odd fill', () => {
+            fillSolid(bitmap, 1);
+            // Horizontal bowtie: vertex order TL, TR, BL, BR. The top and
+            // bottom edges + two crossing diagonals split the bounding box
+            // into a top triangle (carved), bottom triangle (carved), and
+            // left/right triangles (untouched, even-odd outside).
+            const bowtie: Point[] = [
+                { x: 10, y: 10 }, // TL
+                { x: 30, y: 10 }, // TR
+                { x: 10, y: 30 }, // BL
+                { x: 30, y: 30 }, // BR
+            ];
+            Carve.polygon(bitmap, bowtie);
+
+            // Top lobe interior (above the diagonal crossing at (20,20)).
+            expect(bitmap.getPixel(20, 12)).toBe(0);
+            // Bottom lobe interior.
+            expect(bitmap.getPixel(20, 28)).toBe(0);
+            // Left-side triangle (between the diagonals, near the left edge)
+            // is OUTSIDE under even-odd — untouched.
+            expect(bitmap.getPixel(12, 20)).toBe(1);
+            // Right-side triangle is also outside.
+            expect(bitmap.getPixel(28, 20)).toBe(1);
+        });
+    });
+
+    describe('edge clipping', () => {
+        it('clips polygons that straddle the world boundary', () => {
+            fillSolid(bitmap, 1);
+            const partlyOutside: Point[] = [
+                { x: -10, y: -10 },
+                { x: 10, y: -10 },
+                { x: 10, y: 10 },
+                { x: -10, y: 10 },
+            ];
+            expect(() => Carve.polygon(bitmap, partlyOutside)).not.toThrow();
+            // (5, 5) is inside the polygon AND inside the bitmap — carved.
+            expect(bitmap.getPixel(5, 5)).toBe(0);
+            // (11, 5) is outside the polygon — untouched.
+            expect(bitmap.getPixel(11, 5)).toBe(1);
+        });
+
+        it('is a no-op for polygons entirely outside the bitmap', () => {
+            fillSolid(bitmap, 1);
+            const outside: Point[] = [
+                { x: -100, y: -100 },
+                { x: -50, y: -100 },
+                { x: -50, y: -50 },
+            ];
+            const before = countPixels(bitmap, 1);
+            Carve.polygon(bitmap, outside);
+            expect(countPixels(bitmap, 1)).toBe(before);
+        });
+    });
+
+    describe('degenerate inputs', () => {
+        it('is a no-op for empty point list', () => {
+            fillSolid(bitmap, 1);
+            Carve.polygon(bitmap, []);
+            expect(countPixels(bitmap, 0)).toBe(0);
+        });
+
+        it('is a no-op for fewer than 3 points', () => {
+            fillSolid(bitmap, 1);
+            Carve.polygon(bitmap, [{ x: 10, y: 10 }]);
+            Carve.polygon(bitmap, [
+                { x: 10, y: 10 },
+                { x: 20, y: 20 },
+            ]);
+            expect(countPixels(bitmap, 0)).toBe(0);
+        });
+    });
+
+    describe('dirty tracking', () => {
+        it('dirties only the chunks the polygon touches', () => {
+            fillSolid(bitmap, 1);
+            for (const chunk of bitmap.chunks) {
+                bitmap.clearDirty(chunk);
+                bitmap.clearVisualDirty(chunk);
+            }
+
+            // Square fully within chunk (0, 0).
+            const inside00: Point[] = [
+                { x: 5, y: 5 },
+                { x: 15, y: 5 },
+                { x: 15, y: 15 },
+                { x: 5, y: 15 },
+            ];
+            Carve.polygon(bitmap, inside00);
+            expect(bitmap.getChunk(0, 0).dirty).toBe(true);
+            expect(bitmap.getChunk(1, 0).dirty).toBe(false);
+            expect(bitmap.getChunk(0, 1).dirty).toBe(false);
+            expect(bitmap.getChunk(1, 1).dirty).toBe(false);
+        });
+
+        it('dirties multiple chunks for a polygon spanning chunks', () => {
+            fillSolid(bitmap, 1);
+            for (const chunk of bitmap.chunks) {
+                bitmap.clearDirty(chunk);
+                bitmap.clearVisualDirty(chunk);
+            }
+
+            const spanning: Point[] = [
+                { x: 20, y: 20 },
+                { x: 44, y: 20 },
+                { x: 44, y: 44 },
+                { x: 20, y: 44 },
+            ];
+            Carve.polygon(bitmap, spanning);
+            expect(bitmap.getChunk(0, 0).dirty).toBe(true);
+            expect(bitmap.getChunk(1, 0).dirty).toBe(true);
+            expect(bitmap.getChunk(0, 1).dirty).toBe(true);
+            expect(bitmap.getChunk(1, 1).dirty).toBe(true);
         });
     });
 });

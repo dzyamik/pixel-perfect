@@ -11,9 +11,9 @@ Alpha. Under active development. APIs may change before v1.0.0.
 - `src/core/types.ts` — shared types: `Point`, `Material`, `Contour`, `Chunk`, `HitResult`.
 - `src/core/Materials.ts` — `MaterialRegistry` (id-validated material lookup).
 - `src/core/ChunkedBitmap.ts` — chunked byte grid, dirty tracking, pixel I/O, coordinate conversion.
-- `src/core/ops/Carve.ts` — `circle(bitmap, cx, cy, radius)`. Sub-pixel center coords supported; bounding box auto-clipped; non-positive / NaN radii are no-ops.
+- `src/core/ops/Carve.ts` — `circle(bitmap, cx, cy, radius)` and `polygon(bitmap, points)`. Sub-pixel coords supported; bounding box auto-clipped; degenerate inputs (radius ≤ 0, < 3 polygon vertices) are no-ops. Polygons use the even-odd fill rule, so self-intersecting shapes carve correctly.
 
-**Not yet implemented:** `Carve.polygon`, `Carve.fromAlphaTexture`, `Deposit.*`, marching squares, Douglas-Peucker, flood fill, spatial queries, the Box2D adapter, the Phaser plugin, `DestructibleTerrain` GameObject, `PixelPerfectSprite`. See `docs-dev/02-roadmap.md` for the build sequence.
+**Not yet implemented:** `Carve.fromAlphaTexture`, `Deposit.*`, marching squares, Douglas-Peucker, flood fill, spatial queries, the Box2D adapter, the Phaser plugin, `DestructibleTerrain` GameObject, `PixelPerfectSprite`. See `docs-dev/02-roadmap.md` for the build sequence.
 
 ## When to use this skill
 
@@ -155,6 +155,10 @@ Material lookup. Ids must be integers in `1..255` (id 0 is reserved for air).
 ### `Carve.circle(bitmap, cx, cy, radius) → void`
 
 Sets every cell within `radius` of `(cx, cy)` to air. Cells at exactly `radius` are included (`dx² + dy² ≤ r²`). Sub-pixel `cx`/`cy` are allowed. The bounding box is clipped to bitmap bounds; circles that fall entirely outside are silent no-ops. `radius ≤ 0` and `NaN` are no-ops.
+
+### `Carve.polygon(bitmap, points) → void`
+
+Sets every cell inside the closed polygon to air. The polygon is implicitly closed (the last point connects back to the first). Filling uses the even-odd rule, so self-intersecting polygons carve correctly (a bowtie carves both lobes; the central crossing region is left untouched). Polygons with fewer than 3 vertices are no-ops; the scanline range is clipped to the bitmap, so polygons that fall outside are silent.
 
 ## Public API (target shape, post-Phase-3)
 
