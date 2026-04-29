@@ -15,8 +15,9 @@ Alpha. Under active development. APIs may change before v1.0.0.
 - `src/core/algorithms/MarchingSquares.ts` — `extract(chunk, bitmap)` returns the per-chunk contour polygons in world coords. 1-pixel padding from neighbor chunks; saddle-point convention "TL-BR diagonal joined" is applied uniformly. Closed contours are emitted with `closed: true`; contours that pass through a chunk boundary come back as open chains for the physics adapter to stitch in Phase 2.
 - `src/core/algorithms/DouglasPeucker.ts` — `simplify(contour, epsilon)` reduces vertex count using Ramer-Douglas-Peucker. Closed contours are split at the vertex farthest from `points[0]` so each half has stable endpoints. Refuses to degenerate a closed contour below 3 vertices. Iterative (no recursion stack risk on long contours). Typical reduction: ≥ 80% on circle contours with `epsilon ≈ 1.0` pixel.
 - `src/core/algorithms/FloodFill.ts` — `findIslands(bitmap, anchor)` returns connected components of solid cells that are not reachable from the anchor set. Anchor strategies: `bottomRow` and `customPoints`. 4-connected BFS; out-of-bounds and air anchors are silent no-ops; islands carry `cells: Point[]` plus a tight `bounds` rect. Two-pass algorithm: first pass marks anchored cells, second pass collects unanchored solid components.
+- `src/core/queries/Spatial.ts` — `isSolid`, `sampleMaterial`, `surfaceY`, `findGroundBelow`, `raycast` (Bresenham). All read directly from the bitmap; out-of-world coordinates are treated as air.
 
-**Not yet implemented:** `Carve.fromAlphaTexture`, spatial queries, the Box2D adapter, the Phaser plugin, `DestructibleTerrain` GameObject, `PixelPerfectSprite`. See `docs-dev/02-roadmap.md` for the build sequence.
+**Not yet implemented:** `Carve.fromAlphaTexture`, the Box2D adapter, the Phaser plugin, `DestructibleTerrain` GameObject, `PixelPerfectSprite`. See `docs-dev/02-roadmap.md` for the build sequence.
 
 ## When to use this skill
 
@@ -178,6 +179,22 @@ Reduces a polyline's vertex count by removing interior points within `epsilon` o
 ### `FloodFill.findIslands(bitmap, anchor) → Island[]`
 
 Returns every connected component of solid cells that is not reachable from the anchor set. `anchor` is `{ kind: 'bottomRow' }` (treats every solid cell on the world's bottom row as anchored) or `{ kind: 'customPoints', points }` (caller-supplied anchors; air and out-of-bounds points are silently ignored). 4-connected BFS — diagonal-only contacts produce separate islands. Each `Island` carries `cells: Point[]` (BFS order) and `bounds: { minX, maxX, minY, maxY }` (inclusive). Use this in the destruction pipeline to identify newly-detached debris that should become dynamic Box2D bodies.
+
+### `Spatial.isSolid(bitmap, x, y) → boolean` / `Spatial.sampleMaterial(bitmap, x, y) → number`
+
+Direct read of the bitmap. Out-of-world coordinates return `false` / `0` (treat-as-air, consistent with `bitmap.getPixel`).
+
+### `Spatial.surfaceY(bitmap, x) → number`
+
+Walks down column `x` from `y = 0` and returns the y of the first solid cell. Returns `bitmap.height` when the column is empty or `x` is out of range — pick this sentinel so `surfaceY(x) - entityHeight` always yields a usable spawn position.
+
+### `Spatial.findGroundBelow(bitmap, x, y, maxDist) → number | null`
+
+Bounded version of `surfaceY`. Walks at most `maxDist` rows starting at `y` (inclusive); returns `null` if no solid cell is found in range or `maxDist <= 0`.
+
+### `Spatial.raycast(bitmap, x1, y1, x2, y2) → HitResult | null`
+
+Bresenham line walk from `(x1, y1)` to `(x2, y2)`. Returns the first solid cell encountered, with its material id and Euclidean distance from the start, or `null` for an air-only path. Endpoints are floored to integers internally; rays starting on solid return the start cell with distance 0.
 
 ## Public API (target shape, post-Phase-3)
 

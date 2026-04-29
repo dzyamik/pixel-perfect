@@ -9,4 +9,5 @@ export * as Deposit from './ops/Deposit.js';
 export * as DouglasPeucker from './algorithms/DouglasPeucker.js';
 export * as FloodFill from './algorithms/FloodFill.js';
 export * as MarchingSquares from './algorithms/MarchingSquares.js';
+export * as Spatial from './queries/Spatial.js';
 export type { Chunk, Contour, HitResult, Island, Material, Point } from './types.js';
