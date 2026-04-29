@@ -82,38 +82,25 @@ describe('DeferredRebuildQueue.enqueueChunk + flush', () => {
         expect(queue.pendingChunkCount()).toBe(1);
     });
 
-    it('respects perFrameBudget: budget = 1 with 3 dirty chunks leaves 2 pending', () => {
-        // Three chunks dirty.
+    it('global rebuild: drains every dirty chunk in a single flush', () => {
+        // Three small disks in three separate chunks → 3 components.
         Deposit.circle(bitmap, 16, 16, 4, 1);
         Deposit.circle(bitmap, 48, 16, 4, 1);
         Deposit.circle(bitmap, 16, 48, 4, 1);
-        const chunks = [
-            bitmap.getChunk(0, 0),
-            bitmap.getChunk(1, 0),
-            bitmap.getChunk(0, 1),
-        ];
-        for (const c of chunks) queue.enqueueChunk(c);
-        queue.flush(adapter, { perFrameBudget: 1 });
-        expect(queue.pendingChunkCount()).toBe(2);
-        // Subsequent flushes drain the rest.
-        queue.flush(adapter, { perFrameBudget: 10 });
+        for (const c of bitmap.chunks) queue.enqueueChunk(c);
+        queue.flush(adapter);
         expect(queue.pendingChunkCount()).toBe(0);
     });
 
-    it('drains chunks in stable (cy, cx) row-major order regardless of insertion order', () => {
-        // Make 4 chunks dirty.
+    it('emits onChunkRebuilt for the representative chunk of each component, in (cy, cx) order', () => {
+        // Four disjoint components each in their own chunk.
         Deposit.circle(bitmap, 48, 48, 4, 1); // (1, 1)
         Deposit.circle(bitmap, 16, 48, 4, 1); // (0, 1)
         Deposit.circle(bitmap, 48, 16, 4, 1); // (1, 0)
         Deposit.circle(bitmap, 16, 16, 4, 1); // (0, 0)
-        // Enqueue in scrambled order.
-        queue.enqueueChunk(bitmap.getChunk(1, 1));
-        queue.enqueueChunk(bitmap.getChunk(0, 0));
-        queue.enqueueChunk(bitmap.getChunk(0, 1));
-        queue.enqueueChunk(bitmap.getChunk(1, 0));
+        for (const c of bitmap.chunks) queue.enqueueChunk(c);
         const visited: [number, number][] = [];
         queue.flush(adapter, {
-            perFrameBudget: 4,
             onChunkRebuilt: (chunk) => visited.push([chunk.cx, chunk.cy]),
         });
         expect(visited).toEqual([
@@ -167,13 +154,12 @@ describe('DeferredRebuildQueue.enqueueDebris + flush', () => {
         expect(material).toBe(dirt);
     });
 
-    it('processes all queued debris regardless of perFrameBudget', () => {
+    it('processes all queued debris (no budget cap)', () => {
         const onDebrisCreated = vi.fn();
         for (let i = 0; i < 5; i++) {
             queue.enqueueDebris(debrisContour, dirt);
         }
-        queue.flush(adapter, { onDebrisCreated, perFrameBudget: 1 });
-        // Budget caps chunk rebuilds; debris is processed unconditionally.
+        queue.flush(adapter, { onDebrisCreated });
         expect(onDebrisCreated).toHaveBeenCalledTimes(5);
     });
 

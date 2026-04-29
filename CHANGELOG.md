@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) loosely; this project does not yet publish to npm.
 
+## [v0.2.5] — 2026-04-29
+
+Phase 2.5: cross-chunk contour stitching. Removes the v0.2.0 limitation that constrained terrain colliders to chunk-sized blobs.
+
+### Changed
+
+- **`DeferredRebuildQueue.flush` now does a per-blob global rebuild.** When any chunk is dirty, the queue runs `FloodFill.findAllComponents` on the bitmap, extracts each component's closed contour(s) via the new `ContourExtractor.componentToContours` helper, and routes each component to a representative chunk (the chunk containing the component's lex-smallest cell — its BFS start). The `Box2DAdapter`'s `Map<Chunk, BodyId>` now holds at most one entry per blob; chunks fully interior to a blob have no body at all. Previously-unsupported large blobs spanning many chunks now produce a coherent single body.
+- The `perFrameBudget` option on `flush` and the `defaultPerFrameBudget` constructor option are removed. Per-blob rebuilds can't be amortized as cleanly as per-chunk ones; if the global pass becomes a profile hotspot, the optimization is to confine flood fill + extraction to the dirty chunks' bounding box (deferred).
+- `DeferredRebuildQueue.flush` now clears the collider dirty flag on *every* chunk after a rebuild (since the rebuild is global, every chunk's collider state is now in sync).
+
+### Added
+
+- `FloodFill.findAllComponents(bitmap)` — every connected solid component, regardless of anchoring. Internally `findIslands(bitmap, { kind: 'customPoints', points: [] })`.
+- `ContourExtractor.componentToContours(component, bitmap, epsilon)` — shared utility that builds a single-chunk temp bitmap covering the component, runs marching squares, and returns the simplified contours. Used by `DeferredRebuildQueue` for terrain rebuild and by `DebrisDetector` for debris contour extraction. Crucial detail: the temp bitmap uses one chunk sized to the component, so MS sees the entire component in one extraction pass — fixing the recursive cross-chunk problem that the v0.2.0 path would have inherited.
+- `Box2DAdapter.trackedChunks()` — iterator over chunks that currently have a terrain body. Used by the queue to destroy bodies for chunks that no longer host a component after a global rebuild.
+
+### Tests
+
+- Three new cross-chunk integration cases in `tests/integration/Phase2Pipeline.test.ts`: a single blob spanning 4 chunks produces one coherent body; two disjoint cross-chunk blobs produce two bodies; a carve that bisects a multi-chunk bar destroys the old body and produces ≥ 1 valid new body.
+- All 198 prior tests still pass; total is now 201 / ~1.3 s.
+
+### Known limitations remaining
+
+- Two blobs whose first cells happen to fall in the same chunk merge into one Box2D body (with multiple chain shapes). For static terrain this is harmless — the colliders are correct — but it slightly couples rebuild work for unrelated blobs. Splitting them would require allocating multiple body slots per chunk, which the current `Map<Chunk, BodyId>` shape doesn't support.
+
+---
+
 ## [v0.2.0] — 2026-04-29
 
 Phase 2 of `docs-dev/02-roadmap.md` is complete: the `src/physics/` module bridges core contours to live Box2D bodies via [`phaser-box2d`](https://phaser.io/box2d).

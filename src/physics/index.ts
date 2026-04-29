@@ -3,6 +3,7 @@
 
 export { Box2DAdapter } from './Box2DAdapter.js';
 export type { Box2DAdapterOptions } from './Box2DAdapter.js';
+export { componentToContours } from './ContourExtractor.js';
 export { contourToChain, contourToPolygon } from './ContourToBody.js';
 export type { ChainOptions, PolygonOptions } from './ContourToBody.js';
 export * as DebrisDetector from './DebrisDetector.js';

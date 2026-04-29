@@ -6,7 +6,7 @@
 
 Alpha. Under active development. APIs may change before v1.0.0.
 
-**Currently implemented — Phase 1 + 2 complete (`v0.2.0`):**
+**Currently implemented — Phase 1 + 2 + 2.5 (`v0.2.5`):**
 
 - `src/core/types.ts` — shared types: `Point`, `Material`, `Contour`, `Chunk`, `HitResult`.
 - `src/core/Materials.ts` — `MaterialRegistry` (id-validated material lookup).
@@ -19,9 +19,9 @@ Alpha. Under active development. APIs may change before v1.0.0.
 
 **Phase 1 (`v0.1.0`) — `src/core/`:** ChunkedBitmap, Materials, Carve / Deposit (circle / polygon / fromAlphaTexture), MarchingSquares, DouglasPeucker, FloodFill, Spatial queries.
 
-**Phase 2 (`v0.2.0`) — `src/physics/`:** typed `phaser-box2d` binding, `ContourToBody` (chain + polygon), `Box2DAdapter` (per-chunk static terrain bodies + dynamic debris), `DeferredRebuildQueue` (end-of-frame body churn with `perFrameBudget`), `DebrisDetector` (FloodFill + contour extraction).
+**Phase 2 (`v0.2.0`) — `src/physics/`:** typed `phaser-box2d` binding, `ContourToBody` (chain + polygon), `Box2DAdapter` (static terrain bodies + dynamic debris), `DeferredRebuildQueue` (end-of-frame body churn), `DebrisDetector` (FloodFill + contour extraction).
 
-> **Phase 2 limitation:** per-chunk marching squares produces open polylines for contours that span multiple chunks. Box2D's open chain needs ≥ 4 vertices, but a typical cross-chunk fragment simplifies to 2–3. Practical consequence: per-chunk colliders are reliable for destructible *islands* up to roughly chunk-size; larger blobs need cross-chunk contour stitching, deferred to v1.1.
+**Phase 2.5 (`v0.2.5`) — cross-chunk stitching.** `DeferredRebuildQueue.flush` runs a per-blob global rebuild: `FloodFill.findAllComponents` finds every connected solid component, `ContourExtractor.componentToContours` extracts each component's closed contour(s) via a single-chunk temp bitmap, and each component is routed to a representative chunk (the one containing its lex-smallest cell). Result: large blobs spanning many chunks produce one coherent body each, instead of failing to produce colliders.
 
 **Not yet implemented (Phase 3+):** the Phaser plugin, `DestructibleTerrain` GameObject, `PixelPerfectSprite`, `DynamicTexture` chunk renderer. See `docs-dev/02-roadmap.md` for the build sequence.
 

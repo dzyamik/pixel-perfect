@@ -1,6 +1,7 @@
-import { DouglasPeucker, MarchingSquares } from '../core/index.js';
+import { FloodFill } from '../core/index.js';
 import type { Chunk, ChunkedBitmap, Contour, Material } from '../core/index.js';
 import type { Box2DAdapter } from './Box2DAdapter.js';
+import { componentToContours } from './ContourExtractor.js';
 import type { BodyId } from './types.js';
 
 /**
@@ -11,28 +12,20 @@ export interface DeferredRebuildQueueOptions {
     bitmap: ChunkedBitmap;
     /** Douglas-Peucker epsilon (in pixels) applied to each extracted contour. Default 1. */
     simplificationEpsilon?: number;
-    /** Default per-frame chunk-rebuild budget. Default 4. */
-    defaultPerFrameBudget?: number;
 }
 
 /**
- * Per-flush options that override the queue's defaults.
+ * Per-flush options.
  */
 export interface FlushOptions {
-    /**
-     * Maximum number of chunk rebuilds processed in this flush. The
-     * remainder rolls over to the next flush. Defaults to the value
-     * supplied at construction (or 4 if unspecified).
-     */
-    perFrameBudget?: number;
     /**
      * Called with the {@link BodyId}, contour, and material for every
      * debris body the flush creates.
      */
     onDebrisCreated?: (bodyId: BodyId, contour: Contour, material: Material) => void;
     /**
-     * Called once per chunk that was rebuilt in this flush. Useful for
-     * debug overlays and for triggering visual repaints downstream.
+     * Called once per chunk whose terrain body was created or rebuilt
+     * by this flush. Useful for debug overlays.
      */
     onChunkRebuilt?: (chunk: Chunk) => void;
 }
@@ -53,43 +46,39 @@ interface PendingDebris {
  *
  * Two work categories:
  *
- *  - **Chunk rebuilds** — `enqueueChunk(chunk)`. On flush, marching
- *    squares + Douglas-Peucker run on each pending chunk and the result
- *    is handed to {@link Box2DAdapter.rebuildChunk}. The chunk's
- *    `dirty` flag is cleared (the visual flag is left for the renderer).
- *    Bounded by `perFrameBudget` to cap worst-case per-frame cost.
+ *  - **Terrain rebuild** — `enqueueChunk(chunk)`. The set of dirtied
+ *    chunks is just a "do we need to re-mesh terrain at all" signal;
+ *    `flush()` does a *global* per-blob rebuild (see below). The
+ *    chunks' collider dirty flags are cleared once the rebuild completes
+ *    (the visual flag is left for the renderer).
  *  - **Debris bodies** — `enqueueDebris(contour, material)`. On flush,
  *    every queued debris is converted into a dynamic body via
  *    {@link Box2DAdapter.createDebrisBody}. Debris is event-driven and
- *    is processed unconditionally (no budget) — debris that misses its
- *    creation frame would visibly pop in.
+ *    is processed unconditionally — debris that misses its creation
+ *    frame would visibly pop in.
  *
- * Drain order for chunks is stable row-major `(cy, cx)`, regardless of
- * insertion order. This matches `ChunkedBitmap.forEachDirtyChunk`'s
- * iteration and keeps best-effort determinism for replay debugging
- * (architecture doc § Determinism).
+ * Per-blob global rebuild
+ * -----------------------
+ * Naive per-chunk marching squares produces *open* polylines wherever
+ * a contour spans multiple chunks; Box2D's open chain shape needs at
+ * least 4 vertices, but cross-chunk fragments simplify to 2–3 after
+ * Douglas-Peucker, leaving collider seams. To avoid this, `flush()`
+ * uses {@link FloodFill.findAllComponents} to identify every connected
+ * solid component, extracts each component's closed contour(s) via the
+ * shared {@link componentToContours} helper, and routes each component
+ * to a *representative chunk* (the chunk containing the component's
+ * lex-smallest cell). The {@link Box2DAdapter}'s `Map<Chunk, BodyId>`
+ * then holds at most one entry per representative chunk; chunks that
+ * are interior to a blob have no body at all.
  *
- * Phase 2 limitation — cross-chunk contour stitching
- * --------------------------------------------------
- * Per-chunk marching-squares output produces *closed* contours when a
- * solid blob fits inside the chunk plus its 1-pixel padding, and *open*
- * polylines when a blob spans multiple chunks. Box2D requires at least
- * 4 vertices for an open chain shape (ghost-vertex handling); after
- * Douglas-Peucker simplification, a typical cross-chunk fragment
- * collapses to 2–3 vertices and is silently dropped.
- *
- * The practical consequence: per-chunk colliders are reliable for
- * destructible *islands* up to roughly chunk-size in extent. Larger
- * blobs need cross-chunk stitching — extracting a global contour for
- * each connected solid component and routing it to a single chunk's
- * body. This is deliberately deferred to v1.1; the
- * `tests/integration/Phase2Pipeline.test.ts` smoke uses single-chunk
- * worlds to stay within the supported regime.
+ * Trade-off: the global pass is O(W·H) per dirty flush rather than
+ * per-chunk. Fine for destruction events that happen a few times per
+ * second; if it shows up as a hot path later, the optimization is to
+ * confine flood fill + extraction to the dirty chunks' bounding box.
  */
 export class DeferredRebuildQueue {
     private readonly bitmap: ChunkedBitmap;
     private readonly simplificationEpsilon: number;
-    private readonly defaultPerFrameBudget: number;
 
     private readonly dirtyChunks = new Set<Chunk>();
     private readonly pendingDebris: PendingDebris[] = [];
@@ -97,7 +86,6 @@ export class DeferredRebuildQueue {
     constructor(options: DeferredRebuildQueueOptions) {
         this.bitmap = options.bitmap;
         this.simplificationEpsilon = options.simplificationEpsilon ?? 1;
-        this.defaultPerFrameBudget = options.defaultPerFrameBudget ?? 4;
     }
 
     /**
@@ -127,28 +115,13 @@ export class DeferredRebuildQueue {
     }
 
     /**
-     * Drains queued work into Box2D. Chunk rebuilds are bounded by
-     * `perFrameBudget` (default 4); debris creation is unbounded.
+     * Drains queued work into Box2D. When any chunk is dirty, this runs
+     * a full per-blob global rebuild (see class doc). Debris creation is
+     * always unbounded.
      */
     flush(adapter: Box2DAdapter, options: FlushOptions = {}): void {
-        const budget = options.perFrameBudget ?? this.defaultPerFrameBudget;
-
-        if (this.dirtyChunks.size > 0 && budget > 0) {
-            // Sort chunks into row-major (cy, cx) order. Working from a
-            // sorted snapshot ensures stable iteration regardless of
-            // insertion order.
-            const sorted = [...this.dirtyChunks].sort((a, b) => {
-                if (a.cy !== b.cy) return a.cy - b.cy;
-                return a.cx - b.cx;
-            });
-
-            const limit = Math.min(budget, sorted.length);
-            for (let i = 0; i < limit; i++) {
-                const chunk = sorted[i]!;
-                this.rebuildOne(chunk, adapter);
-                options.onChunkRebuilt?.(chunk);
-                this.dirtyChunks.delete(chunk);
-            }
+        if (this.dirtyChunks.size > 0) {
+            this.rebuildTerrain(adapter, options.onChunkRebuilt);
         }
 
         if (this.pendingDebris.length > 0) {
@@ -164,18 +137,61 @@ export class DeferredRebuildQueue {
         }
     }
 
-    private rebuildOne(chunk: Chunk, adapter: Box2DAdapter): void {
-        const raw = MarchingSquares.extract(chunk, this.bitmap);
-        const simplified: Contour[] = [];
-        for (const c of raw) {
-            const s = DouglasPeucker.simplify(c, this.simplificationEpsilon);
-            // Drop contours that simplification reduced to a degenerate
-            // shape — they cannot form a valid Box2D chain.
-            if (s.points.length >= 3 || (!s.closed && s.points.length >= 4)) {
-                simplified.push(s);
+    private rebuildTerrain(adapter: Box2DAdapter, onChunkRebuilt?: (chunk: Chunk) => void): void {
+        // Identify every connected solid component in the bitmap, extract
+        // its closed contours, and route each component to a deterministic
+        // representative chunk (the chunk containing its lex-smallest
+        // cell — i.e., the BFS start cell). Multiple components whose
+        // first cells fall in the same chunk merge into one body's chain
+        // shapes; for static terrain this is harmless.
+        const components = FloodFill.findAllComponents(this.bitmap);
+        const cs = this.bitmap.chunkSize;
+        const newAssignments = new Map<Chunk, Contour[]>();
+
+        for (const component of components) {
+            const head = component.cells[0];
+            if (head === undefined) continue; // empty component, never happens
+            const cx = Math.floor(head.x / cs);
+            const cy = Math.floor(head.y / cs);
+            const repChunk = this.bitmap.getChunk(cx, cy);
+            const contours = componentToContours(
+                component,
+                this.bitmap,
+                this.simplificationEpsilon,
+            );
+            const accum = newAssignments.get(repChunk) ?? [];
+            accum.push(...contours);
+            newAssignments.set(repChunk, accum);
+        }
+
+        // Destroy every previously-tracked chunk that no longer has an
+        // assignment. Snapshot the iterable first because destroyChunk
+        // mutates the adapter's internal map.
+        const previouslyTracked = [...adapter.trackedChunks()];
+        for (const chunk of previouslyTracked) {
+            if (!newAssignments.has(chunk)) {
+                adapter.destroyChunk(chunk);
             }
         }
-        adapter.rebuildChunk(chunk, simplified);
-        this.bitmap.clearDirty(chunk);
+
+        // Rebuild the rep chunks. Sort for deterministic invocation order
+        // (eases replay debugging and gives onChunkRebuilt a stable
+        // sequence).
+        const repsSorted = [...newAssignments.keys()].sort((a, b) => {
+            if (a.cy !== b.cy) return a.cy - b.cy;
+            return a.cx - b.cx;
+        });
+        for (const chunk of repsSorted) {
+            adapter.rebuildChunk(chunk, newAssignments.get(chunk)!);
+            onChunkRebuilt?.(chunk);
+        }
+
+        // Clear all dirty flags — every chunk's collider state is now in
+        // sync with the bitmap, regardless of which chunks were
+        // explicitly enqueued.
+        for (const chunk of this.bitmap.chunks) {
+            this.bitmap.clearDirty(chunk);
+        }
+        this.dirtyChunks.clear();
     }
 }

@@ -9,17 +9,8 @@
  *    created, no leaks)."
  *
  * Plus a smaller-scale stress test that verifies body counts don't grow
- * without bound across many destroy/create cycles.
- *
- * Single-chunk scope
- * ------------------
- * Phase 2 produces per-chunk bodies whose chain shapes are extracted
- * within each chunk's 1-pixel-padded sample window. Contours that close
- * locally (small blobs that fit in one chunk + padding) form valid
- * loop chains; contours that span multiple chunks would need explicit
- * cross-chunk stitching, which Phase 2 does not implement. The tests
- * below intentionally use single-chunk worlds so this limitation is
- * not exercised.
+ * without bound across many destroy/create cycles, and a Phase 2.5
+ * cross-chunk test that exercises the per-blob global rebuild path.
  */
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -75,7 +66,7 @@ afterEach(() => {
 /** Convenience: enqueue every dirty chunk and flush. */
 function flushAll() {
     bitmap.forEachDirtyChunk((chunk) => queue.enqueueChunk(chunk));
-    queue.flush(adapter, { perFrameBudget: 100 });
+    queue.flush(adapter);
 }
 
 describe('Phase 2 pipeline — destroy a chunk of terrain', () => {
@@ -127,7 +118,6 @@ describe('Phase 2 pipeline — destroy a chunk of terrain', () => {
 
         const debrisBodies: BodyId[] = [];
         queue.flush(adapter, {
-            perFrameBudget: 100,
             onDebrisCreated: (bodyId) => debrisBodies.push(bodyId),
         });
 
@@ -136,6 +126,96 @@ describe('Phase 2 pipeline — destroy a chunk of terrain', () => {
         expect(debrisBodies.length).toBe(1);
         expect(b2Body_IsValid(debrisBodies[0]!)).toBe(true);
         expect(b2Body_GetShapeCount(debrisBodies[0]!)).toBeGreaterThan(0);
+    });
+});
+
+describe('Phase 2.5 pipeline — cross-chunk blob support', () => {
+    it('a single blob spanning multiple chunks produces one coherent body', () => {
+        // 128x128 / 32 = 16 chunks. Solid rectangle spans 4 chunks
+        // (cx 1..2, cy 2..3) — well past chunkSize.
+        const big = new ChunkedBitmap({ width: 128, height: 128, chunkSize: 32 });
+        const bigAdapter = new Box2DAdapter({ worldId, pixelsPerMeter: 32 });
+        const bigQueue = new DeferredRebuildQueue({ bitmap: big });
+        try {
+            for (let x = 32; x < 96; x++) {
+                for (let y = 64; y < 128; y++) {
+                    big.setPixel(x, y, 1);
+                }
+            }
+            for (const c of big.chunks) bigQueue.enqueueChunk(c);
+            bigQueue.flush(bigAdapter);
+
+            // Exactly one terrain body for the one connected blob.
+            const liveBodies = big.chunks
+                .map((c) => bigAdapter.getChunkBody(c))
+                .filter((b) => b !== null);
+            expect(liveBodies.length).toBe(1);
+            // The single body has a closed-loop chain wrapping the whole
+            // blob (one shape per edge after DP simplification).
+            expect(b2Body_GetShapeCount(liveBodies[0]!)).toBeGreaterThan(0);
+        } finally {
+            bigAdapter.dispose();
+        }
+    });
+
+    it('two disjoint cross-chunk blobs produce two bodies', () => {
+        const big = new ChunkedBitmap({ width: 128, height: 128, chunkSize: 32 });
+        const bigAdapter = new Box2DAdapter({ worldId, pixelsPerMeter: 32 });
+        const bigQueue = new DeferredRebuildQueue({ bitmap: big });
+        try {
+            // Blob A spans (0..1, 0..1) chunks.
+            for (let x = 16; x < 48; x++) for (let y = 16; y < 48; y++) big.setPixel(x, y, 1);
+            // Blob B spans (2..3, 2..3) chunks.
+            for (let x = 80; x < 112; x++) for (let y = 80; y < 112; y++) big.setPixel(x, y, 1);
+
+            for (const c of big.chunks) bigQueue.enqueueChunk(c);
+            bigQueue.flush(bigAdapter);
+
+            const liveBodies = big.chunks
+                .map((c) => bigAdapter.getChunkBody(c))
+                .filter((b) => b !== null);
+            expect(liveBodies.length).toBe(2);
+        } finally {
+            bigAdapter.dispose();
+        }
+    });
+
+    it('carving across a chunk boundary destroys the old body and creates new bodies', () => {
+        const big = new ChunkedBitmap({ width: 128, height: 128, chunkSize: 32 });
+        const bigAdapter = new Box2DAdapter({ worldId, pixelsPerMeter: 32 });
+        const bigQueue = new DeferredRebuildQueue({ bitmap: big });
+        try {
+            // Single horizontal bar spanning 4 chunks.
+            for (let x = 16; x < 112; x++) for (let y = 64; y < 96; y++) big.setPixel(x, y, 1);
+            for (const c of big.chunks) bigQueue.enqueueChunk(c);
+            bigQueue.flush(bigAdapter);
+
+            const before = big.chunks
+                .map((c) => bigAdapter.getChunkBody(c))
+                .filter((b): b is BodyId => b !== null);
+            expect(before.length).toBe(1);
+            const beforeBody = before[0]!;
+
+            // Carve a hole that bisects the bar.
+            Carve.circle(big, 64, 80, 10);
+            for (const c of big.chunks) bigQueue.enqueueChunk(c);
+            bigQueue.flush(bigAdapter);
+
+            // Old body destroyed.
+            expect(b2Body_IsValid(beforeBody)).toBe(false);
+
+            // After the bisecting carve, depending on radius vs height
+            // we either have one bar with a hole (donut-like, 1 body) or
+            // two halves (2 bodies). Just verify SOMETHING coherent
+            // exists.
+            const after = big.chunks
+                .map((c) => bigAdapter.getChunkBody(c))
+                .filter((b): b is BodyId => b !== null);
+            expect(after.length).toBeGreaterThanOrEqual(1);
+            for (const b of after) expect(b2Body_IsValid(b)).toBe(true);
+        } finally {
+            bigAdapter.dispose();
+        }
     });
 });
 

@@ -1,10 +1,6 @@
-import {
-    ChunkedBitmap,
-    DouglasPeucker,
-    FloodFill,
-    MarchingSquares,
-} from '../core/index.js';
-import type { Contour, Island } from '../core/index.js';
+import { FloodFill } from '../core/index.js';
+import type { ChunkedBitmap, Contour, Island } from '../core/index.js';
+import { componentToContours } from './ContourExtractor.js';
 
 /** Default anchor: every solid cell on the world's bottom row is static. */
 const DEFAULT_ANCHOR: FloodFill.AnchorStrategy = { kind: 'bottomRow' };
@@ -54,7 +50,7 @@ export function detect(bitmap: ChunkedBitmap, options: DetectOptions = {}): Debr
     const islands = FloodFill.findIslands(bitmap, anchor);
     return islands.map((island) => ({
         island,
-        contours: extractIslandContours(island, bitmap, epsilon),
+        contours: componentToContours(island, bitmap, epsilon),
         dominantMaterial: dominantMaterial(island, bitmap),
     }));
 }
@@ -79,68 +75,6 @@ export function detectAndRemove(
         }
     }
     return debris;
-}
-
-/**
- * Builds a small temporary `ChunkedBitmap` containing just the island,
- * runs marching squares on every chunk of it, and returns the contours
- * translated back into the source bitmap's coordinate space.
- *
- * The temp-bitmap approach is simple and correct, but allocates memory
- * for the bounding box. For typical post-destruction debris (a few
- * hundred cells) this is acceptable; very large islands could be
- * optimized later by extracting contours from the source chunks
- * directly.
- */
-function extractIslandContours(
-    island: Island,
-    sourceBitmap: ChunkedBitmap,
-    epsilon: number,
-): Contour[] {
-    const PADDING = 1;
-    const minX = island.bounds.minX - PADDING;
-    const minY = island.bounds.minY - PADDING;
-    const widthPx = island.bounds.maxX - island.bounds.minX + 1 + 2 * PADDING;
-    const heightPx = island.bounds.maxY - island.bounds.minY + 1 + 2 * PADDING;
-
-    // Pad to chunkSize multiples (ChunkedBitmap requires divisibility).
-    const cs = sourceBitmap.chunkSize;
-    const widthPadded = Math.ceil(widthPx / cs) * cs;
-    const heightPadded = Math.ceil(heightPx / cs) * cs;
-
-    const temp = new ChunkedBitmap({
-        width: widthPadded,
-        height: heightPadded,
-        chunkSize: cs,
-    });
-    for (const cell of island.cells) {
-        const lx = cell.x - minX;
-        const ly = cell.y - minY;
-        const m = sourceBitmap.getPixel(cell.x, cell.y);
-        if (m > 0) temp.setPixel(lx, ly, m);
-    }
-
-    const contours: Contour[] = [];
-    for (const chunk of temp.chunks) {
-        if (!chunk.dirty) continue; // skip chunks the island didn't touch
-        for (const c of MarchingSquares.extract(chunk, temp)) {
-            const translated: Contour = {
-                points: c.points.map((p) => ({ x: p.x + minX, y: p.y + minY })),
-                closed: c.closed,
-            };
-            contours.push(DouglasPeucker.simplify(translated, epsilon));
-        }
-    }
-
-    // Sort: closed contours before open, then by descending vertex count
-    // (the "outer" boundary of the largest blob is typically the most
-    // important one for callers picking a single contour to use).
-    contours.sort((a, b) => {
-        if (a.closed !== b.closed) return a.closed ? -1 : 1;
-        return b.points.length - a.points.length;
-    });
-
-    return contours;
 }
 
 function dominantMaterial(island: Island, bitmap: ChunkedBitmap): number {

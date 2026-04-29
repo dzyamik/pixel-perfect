@@ -110,6 +110,15 @@ export class Box2DAdapter {
     }
 
     /**
+     * Iterates the chunks that currently have a terrain body. Used by the
+     * deferred queue to find bodies that should be destroyed when their
+     * chunk no longer hosts any contours after a global rebuild.
+     */
+    trackedChunks(): Iterable<Chunk> {
+        return this.chunkBodies.keys();
+    }
+
+    /**
      * Creates a dynamic body for a detached island contour.
      *
      * Tries `b2PolygonShape` first (for convex contours with ≤ 8

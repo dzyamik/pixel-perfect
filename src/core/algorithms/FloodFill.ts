@@ -9,7 +9,9 @@ import type { Island, Point } from '../types.js';
  *   destructible terrain games (Worms-style).
  * - `customPoints` — caller provides explicit anchor cells. Cells
  *   that are air or out-of-bounds are silently ignored, so callers can
- *   pass long candidate lists without pre-validating.
+ *   pass long candidate lists without pre-validating. Pass an empty
+ *   list (or use {@link findAllComponents}) to get every connected
+ *   solid component as an "island".
  */
 export type AnchorStrategy =
     | { kind: 'bottomRow' }
@@ -137,4 +139,17 @@ export function findIslands(bitmap: ChunkedBitmap, anchor: AnchorStrategy): Isla
     }
 
     return islands;
+}
+
+/**
+ * Returns every connected solid component of the bitmap, regardless of
+ * whether it is anchored to anything.
+ *
+ * This is just `findIslands(bitmap, { kind: 'customPoints', points: [] })`
+ * (no anchors → every solid cell is in some "island"), exposed under a
+ * clearer name because the physics layer's terrain-rebuild path needs
+ * the full component list, not just the detached subset.
+ */
+export function findAllComponents(bitmap: ChunkedBitmap): Island[] {
+    return findIslands(bitmap, { kind: 'customPoints', points: [] });
 }
