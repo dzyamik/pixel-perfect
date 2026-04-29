@@ -3,65 +3,149 @@
     <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>pixel-perfect — examples</title>
+        <title>pixel-perfect — demos</title>
+        <link rel="stylesheet" href="./_shared/style.css" />
         <style>
             body {
-                font-family: system-ui, sans-serif;
+                display: block;
+            }
+            main {
                 max-width: 720px;
                 margin: 4rem auto;
-                padding: 0 1rem;
-                line-height: 1.6;
+                padding: 0 1.5rem;
             }
             h1 {
-                margin-bottom: 0.25rem;
+                margin: 0 0 0.5rem;
+                font-size: 1.6rem;
             }
-            .subtitle {
-                color: #666;
+            .lead {
+                color: #8b949e;
                 margin-top: 0;
+                margin-bottom: 2rem;
             }
             ul {
-                padding-left: 1.25rem;
+                list-style: none;
+                padding: 0;
+                margin: 0;
             }
             li {
-                margin: 0.5rem 0;
+                margin: 0;
+                padding: 0;
+                border-top: 1px solid #1a1f29;
             }
-            a {
-                color: #0366d6;
+            li a {
+                display: block;
+                padding: 1rem 0;
+                color: #cfd6e0;
                 text-decoration: none;
             }
-            a:hover {
-                text-decoration: underline;
+            li a:hover {
+                color: #ffffff;
+                background: #14181f;
+                margin: 0 -0.5rem;
+                padding-left: 0.5rem;
+                padding-right: 0.5rem;
+            }
+            .num {
+                color: #8b949e;
+                font-family: monospace;
+                margin-right: 0.75rem;
+            }
+            .desc {
+                color: #8b949e;
+                font-size: 0.85rem;
+                margin-top: 0.25rem;
             }
             .status {
-                color: #999;
-                font-style: italic;
+                display: inline-block;
+                font-size: 0.7rem;
+                padding: 1px 6px;
+                border-radius: 3px;
+                margin-left: 0.5rem;
+                vertical-align: middle;
+            }
+            .status.live {
+                background: #1e3a2e;
+                color: #4ec9b0;
+            }
+            .status.coming {
+                background: #2a2e3a;
+                color: #6e7785;
+            }
+            footer {
+                margin-top: 3rem;
+                padding-top: 1rem;
+                border-top: 1px solid #1a1f29;
+                color: #6e7785;
+                font-size: 0.8rem;
             }
         </style>
     </head>
     <body>
-        <h1>pixel-perfect</h1>
-        <p class="subtitle">Examples — early development. Most of these are not implemented yet.</p>
-        <ul>
-            <li>
-                <a href="/01-basic-destruction/">01 — Basic destruction</a>
-                <span class="status">(coming soon)</span>
-            </li>
-            <li>
-                <a href="/02-worms-style/">02 — Worms-style demo</a>
-                <span class="status">(coming soon)</span>
-            </li>
-            <li>
-                <a href="/03-pixel-perfect-sprite/">03 — Pixel-perfect sprite collision</a>
-                <span class="status">(coming soon)</span>
-            </li>
-            <li>
-                <a href="/04-falling-debris/">04 — Falling debris stress test</a>
-                <span class="status">(coming soon)</span>
-            </li>
-            <li>
-                <a href="/05-generate-from-image/">05 — Generate terrain from image</a>
-                <span class="status">(coming soon)</span>
-            </li>
-        </ul>
+        <main>
+            <h1>pixel-perfect</h1>
+            <p class="lead">
+                Phaser&nbsp;v4 destructible terrain &amp; pixel-perfect collision. Demo
+                sandbox — open one to verify the library does what it says, or pull a
+                demo apart to learn the API.
+            </p>
+            <ul>
+                <li>
+                    <a href="/01-basic-rendering/">
+                        <span class="num">01</span>basic rendering
+                        <span class="status live">live</span>
+                        <div class="desc">
+                            Procedural terrain painted from a `ChunkedBitmap` into
+                            canvas-backed Phaser textures. No interaction, no physics
+                            — just verifies the rendering pipeline.
+                        </div>
+                    </a>
+                </li>
+                <li>
+                    <a>
+                        <span class="num">02</span>click to carve
+                        <span class="status coming">coming</span>
+                        <div class="desc">
+                            Click anywhere on the terrain to carve a circular hole.
+                            Watch the chunks repaint.
+                        </div>
+                    </a>
+                </li>
+                <li>
+                    <a>
+                        <span class="num">03</span>physics colliders
+                        <span class="status coming">coming</span>
+                        <div class="desc">
+                            Same as 02 but with a Box2D world wired up. Drop a sprite
+                            and watch it land on terrain that follows the bitmap.
+                        </div>
+                    </a>
+                </li>
+                <li>
+                    <a>
+                        <span class="num">04</span>falling debris
+                        <span class="status coming">coming</span>
+                        <div class="desc">
+                            Carve through an island; detached chunks become dynamic
+                            Box2D bodies and fall under gravity.
+                        </div>
+                    </a>
+                </li>
+                <li>
+                    <a>
+                        <span class="num">05</span>pixel-perfect sprite
+                        <span class="status coming">coming</span>
+                        <div class="desc">
+                            Two sprites with transparent regions; only solid pixels
+                            register collisions.
+                        </div>
+                    </a>
+                </li>
+            </ul>
+            <footer>
+                Run <code>npm run dev</code>, open this page, and click a demo. New
+                demos will appear here as Phase 3 ships.
+            </footer>
+        </main>
     </body>
 </html>
