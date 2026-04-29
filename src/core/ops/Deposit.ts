@@ -1,6 +1,12 @@
 import type { ChunkedBitmap } from '../ChunkedBitmap.js';
 import type { Point } from '../types.js';
-import { paintCircle, paintPolygon } from './raster.js';
+import type { AlphaSource } from './raster.js';
+import { paintCircle, paintFromAlphaTexture, paintPolygon } from './raster.js';
+
+export type { AlphaSource } from './raster.js';
+
+/** Default alpha cutoff: pixels with alpha < 128 are treated as transparent. */
+const DEFAULT_ALPHA_THRESHOLD = 128;
 
 /**
  * Deposits material in a filled disc, setting every cell within `radius`
@@ -40,4 +46,30 @@ export function polygon(
     materialId: number,
 ): void {
     paintPolygon(bitmap, points, materialId);
+}
+
+/**
+ * Deposits material from an alpha-mask "stamp". The source is placed
+ * with its top-left at `(dstX, dstY)`; for each source pixel whose alpha
+ * is at or above `threshold`, the corresponding bitmap cell is set to
+ * `materialId`. The deposit complement of {@link Carve.fromAlphaTexture}.
+ *
+ * The primary use is procedural terrain generation from a PNG mask:
+ * load the mask via Phaser, extract its `ImageData`, and call this with
+ * a single material id to produce the initial terrain shape.
+ *
+ * @param threshold  Alpha cutoff in `0..255`. Default `128`.
+ * @param materialId Bitmap value to write where the source is opaque.
+ *
+ * @throws (via setPixel) If `materialId` is not an integer in `0..255`.
+ */
+export function fromAlphaTexture(
+    bitmap: ChunkedBitmap,
+    source: AlphaSource,
+    dstX: number,
+    dstY: number,
+    materialId: number,
+    threshold: number = DEFAULT_ALPHA_THRESHOLD,
+): void {
+    paintFromAlphaTexture(bitmap, source, dstX, dstY, threshold, materialId);
 }

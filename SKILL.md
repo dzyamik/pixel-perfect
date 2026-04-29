@@ -6,18 +6,20 @@
 
 Alpha. Under active development. APIs may change before v1.0.0.
 
-**Currently implemented (Phase 1, Weeks 1–2):**
+**Currently implemented — Phase 1 complete (`v0.1.0` candidate):**
 
 - `src/core/types.ts` — shared types: `Point`, `Material`, `Contour`, `Chunk`, `HitResult`.
 - `src/core/Materials.ts` — `MaterialRegistry` (id-validated material lookup).
 - `src/core/ChunkedBitmap.ts` — chunked byte grid, dirty tracking, pixel I/O, coordinate conversion.
-- `src/core/ops/Carve.ts` and `src/core/ops/Deposit.ts` — `circle(...)` and `polygon(...)`. Carve writes 0 (air); Deposit writes a caller-supplied material id. Same rasterizer underneath (`src/core/ops/raster.ts`). Sub-pixel coords supported; bounding box auto-clipped; degenerate inputs (radius ≤ 0, < 3 polygon vertices) are no-ops. Polygons use the even-odd fill rule, so self-intersecting shapes are handled correctly.
+- `src/core/ops/Carve.ts` and `src/core/ops/Deposit.ts` — `circle`, `polygon`, and `fromAlphaTexture`. Carve writes 0 (air); Deposit writes a caller-supplied material id. Same rasterizer underneath (`src/core/ops/raster.ts`). Sub-pixel coords supported; bounding box auto-clipped; degenerate inputs (radius ≤ 0, < 3 polygon vertices, zero-sized source) are no-ops. Polygons use the even-odd fill rule, so self-intersecting shapes are handled correctly. `fromAlphaTexture` accepts any structural `AlphaSource = { data: Uint8ClampedArray, width, height }`, which `ImageData` satisfies — core never imports a DOM type.
 - `src/core/algorithms/MarchingSquares.ts` — `extract(chunk, bitmap)` returns the per-chunk contour polygons in world coords. 1-pixel padding from neighbor chunks; saddle-point convention "TL-BR diagonal joined" is applied uniformly. Closed contours are emitted with `closed: true`; contours that pass through a chunk boundary come back as open chains for the physics adapter to stitch in Phase 2.
 - `src/core/algorithms/DouglasPeucker.ts` — `simplify(contour, epsilon)` reduces vertex count using Ramer-Douglas-Peucker. Closed contours are split at the vertex farthest from `points[0]` so each half has stable endpoints. Refuses to degenerate a closed contour below 3 vertices. Iterative (no recursion stack risk on long contours). Typical reduction: ≥ 80% on circle contours with `epsilon ≈ 1.0` pixel.
 - `src/core/algorithms/FloodFill.ts` — `findIslands(bitmap, anchor)` returns connected components of solid cells that are not reachable from the anchor set. Anchor strategies: `bottomRow` and `customPoints`. 4-connected BFS; out-of-bounds and air anchors are silent no-ops; islands carry `cells: Point[]` plus a tight `bounds` rect. Two-pass algorithm: first pass marks anchored cells, second pass collects unanchored solid components.
 - `src/core/queries/Spatial.ts` — `isSolid`, `sampleMaterial`, `surfaceY`, `findGroundBelow`, `raycast` (Bresenham). All read directly from the bitmap; out-of-world coordinates are treated as air.
 
-**Not yet implemented:** `Carve.fromAlphaTexture`, the Box2D adapter, the Phaser plugin, `DestructibleTerrain` GameObject, `PixelPerfectSprite`. See `docs-dev/02-roadmap.md` for the build sequence.
+**Phase 1 of `docs-dev/02-roadmap.md` is complete: ChunkedBitmap, Materials, Carve / Deposit (circle / polygon / fromAlphaTexture), MarchingSquares, DouglasPeucker, FloodFill, Spatial queries.**
+
+**Not yet implemented (Phase 2+):** the Box2D adapter (`src/physics/`), the Phaser plugin and `DestructibleTerrain` GameObject (`src/phaser/`), `PixelPerfectSprite`. See `docs-dev/02-roadmap.md` for the build sequence.
 
 ## When to use this skill
 
@@ -167,6 +169,10 @@ Sets every cell inside the closed polygon to air. The polygon is implicitly clos
 ### `Deposit.circle(bitmap, cx, cy, radius, materialId) → void` / `Deposit.polygon(bitmap, points, materialId) → void`
 
 Same shapes and clipping as `Carve.*`, but writes `materialId` instead of air. Throws (via `setPixel`) if `materialId` is outside `0..255`. The id is not validated against the bitmap's material registry — callers may use unregistered ids if they own their own renderer / lookup pipeline (the renderer or physics adapter will surface the bad id when it tries to look up properties).
+
+### `Carve.fromAlphaTexture(bitmap, source, dstX, dstY, threshold = 128) → void` / `Deposit.fromAlphaTexture(bitmap, source, dstX, dstY, materialId, threshold = 128) → void`
+
+Stamps an alpha mask onto the bitmap. The source is an `AlphaSource = { data: Uint8ClampedArray, width, height }` (browser `ImageData` satisfies this); for each source pixel whose alpha byte is `>= threshold`, the corresponding bitmap cell at world `(dstX + sx, dstY + sy)` is set (Carve → 0, Deposit → `materialId`). Source rectangles that overhang or fall entirely outside the world are clipped silently. Threshold default `128` matches the typical "non-transparent counts as solid" cut-off for game-asset PNG masks.
 
 ### `MarchingSquares.extract(chunk, bitmap) → Contour[]`
 

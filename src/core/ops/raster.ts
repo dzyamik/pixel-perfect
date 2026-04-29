@@ -11,6 +11,20 @@ import type { Point } from '../types.js';
  */
 
 /**
+ * Structural shape of an RGBA pixel source. Browser `ImageData` (and the
+ * happy-dom equivalent used in tests) satisfy this contract directly.
+ * Keeping the type structural means the Phaser layer can pass any source
+ * that exposes RGBA pixels — e.g. an `ImageData` extracted from a
+ * `DynamicTexture` — without core taking a DOM dependency.
+ */
+export interface AlphaSource {
+    /** RGBA bytes, row-major, 4 bytes per pixel. Length = width * height * 4. */
+    readonly data: Uint8ClampedArray;
+    readonly width: number;
+    readonly height: number;
+}
+
+/**
  * Writes `materialId` to every cell within `radius` of `(cx, cy)`.
  *
  * Inclusion test is `dx² + dy² ≤ r²` against integer cell centers, so
@@ -101,6 +115,50 @@ export function paintPolygon(
             const x2 = Math.min(bitmap.width - 1, Math.floor(intersections[k + 1]!));
             for (let x = x1; x <= x2; x++) {
                 bitmap.setPixel(x, y, materialId);
+            }
+        }
+    }
+}
+
+/**
+ * Writes `materialId` to every bitmap cell whose corresponding source
+ * pixel has alpha at or above `threshold`. The source rectangle is
+ * placed with its top-left at world `(dstX, dstY)`; cells that fall
+ * outside the bitmap are silently skipped.
+ *
+ * `threshold` is in the range `0..255`. The default `128` is the usual
+ * "non-transparent counts as solid" cut-off for game-asset alpha masks.
+ *
+ * @internal
+ */
+export function paintFromAlphaTexture(
+    bitmap: ChunkedBitmap,
+    source: AlphaSource,
+    dstX: number,
+    dstY: number,
+    threshold: number,
+    materialId: number,
+): void {
+    const sw = source.width;
+    const sh = source.height;
+    if (sw <= 0 || sh <= 0) return;
+
+    // Clip the source rectangle against the bitmap so we never call
+    // setPixel out of bounds.
+    const sxStart = Math.max(0, -dstX);
+    const syStart = Math.max(0, -dstY);
+    const sxEnd = Math.min(sw, bitmap.width - dstX);
+    const syEnd = Math.min(sh, bitmap.height - dstY);
+    if (sxStart >= sxEnd || syStart >= syEnd) return;
+
+    const data = source.data;
+    for (let sy = syStart; sy < syEnd; sy++) {
+        const rowBase = sy * sw * 4;
+        const wy = dstY + sy;
+        for (let sx = sxStart; sx < sxEnd; sx++) {
+            const alpha = data[rowBase + sx * 4 + 3]!;
+            if (alpha >= threshold) {
+                bitmap.setPixel(dstX + sx, wy, materialId);
             }
         }
     }
