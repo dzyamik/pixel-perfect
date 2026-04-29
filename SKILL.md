@@ -12,8 +12,9 @@ Alpha. Under active development. APIs may change before v1.0.0.
 - `src/core/Materials.ts` — `MaterialRegistry` (id-validated material lookup).
 - `src/core/ChunkedBitmap.ts` — chunked byte grid, dirty tracking, pixel I/O, coordinate conversion.
 - `src/core/ops/Carve.ts` and `src/core/ops/Deposit.ts` — `circle(...)` and `polygon(...)`. Carve writes 0 (air); Deposit writes a caller-supplied material id. Same rasterizer underneath (`src/core/ops/raster.ts`). Sub-pixel coords supported; bounding box auto-clipped; degenerate inputs (radius ≤ 0, < 3 polygon vertices) are no-ops. Polygons use the even-odd fill rule, so self-intersecting shapes are handled correctly.
+- `src/core/algorithms/MarchingSquares.ts` — `extract(chunk, bitmap)` returns the per-chunk contour polygons in world coords. 1-pixel padding from neighbor chunks; saddle-point convention "TL-BR diagonal joined" is applied uniformly. Closed contours are emitted with `closed: true`; contours that pass through a chunk boundary come back as open chains for the physics adapter to stitch in Phase 2.
 
-**Not yet implemented:** `Carve.fromAlphaTexture`, marching squares, Douglas-Peucker, flood fill, spatial queries, the Box2D adapter, the Phaser plugin, `DestructibleTerrain` GameObject, `PixelPerfectSprite`. See `docs-dev/02-roadmap.md` for the build sequence.
+**Not yet implemented:** `Carve.fromAlphaTexture`, Douglas-Peucker, flood fill, spatial queries, the Box2D adapter, the Phaser plugin, `DestructibleTerrain` GameObject, `PixelPerfectSprite`. See `docs-dev/02-roadmap.md` for the build sequence.
 
 ## When to use this skill
 
@@ -163,6 +164,10 @@ Sets every cell inside the closed polygon to air. The polygon is implicitly clos
 ### `Deposit.circle(bitmap, cx, cy, radius, materialId) → void` / `Deposit.polygon(bitmap, points, materialId) → void`
 
 Same shapes and clipping as `Carve.*`, but writes `materialId` instead of air. Throws (via `setPixel`) if `materialId` is outside `0..255`. The id is not validated against the bitmap's material registry — callers may use unregistered ids if they own their own renderer / lookup pipeline (the renderer or physics adapter will surface the bad id when it tries to look up properties).
+
+### `MarchingSquares.extract(chunk, bitmap) → Contour[]`
+
+Extracts contour polygons from one chunk. Output vertices are in world coordinates at half-integer positions (cell-edge midpoints). Saddle cells use the TL-BR-joined convention uniformly so adjacent chunks produce topologically consistent stitching. Each contour reports `closed: true` if the polyline closes within the chunk's padded sample window, or `closed: false` if it extends across a chunk boundary — the physics adapter is responsible for joining open chains across chunks. Walks each segment with solid on the visual-LEFT side, so closed solid blobs walk visually-clockwise (math-CCW in y-down).
 
 ## Public API (target shape, post-Phase-3)
 
