@@ -1,14 +1,3 @@
-# 05 — SKILL.md template
-
-This is the template for the project's own `SKILL.md`, which lives at the repo root and is the reference for AI agents (including future Claude Code sessions) consuming the library. It follows the format Phaser v4 uses for its bundled skills.
-
-`SKILL.md` is filled in incrementally during development. Drop the skeleton at bootstrap; flesh it out as APIs stabilize.
-
----
-
-## Initial skeleton (commit during Phase 0)
-
-```markdown
 # pixel-perfect
 
 > Pixel-perfect spatial reasoning for Phaser v4: chunked-bitmap destructible terrain, alpha-aware sprite collision, and procedural-mask utilities.
@@ -16,6 +5,14 @@ This is the template for the project's own `SKILL.md`, which lives at the repo r
 ## Status
 
 Alpha. Under active development. APIs may change before v1.0.0.
+
+**Currently implemented (Phase 1, Week 1):**
+
+- `src/core/types.ts` — shared types: `Point`, `Material`, `Contour`, `Chunk`, `HitResult`.
+- `src/core/Materials.ts` — `MaterialRegistry` (id-validated material lookup).
+- `src/core/ChunkedBitmap.ts` — chunked byte grid, dirty tracking, pixel I/O, coordinate conversion.
+
+**Not yet implemented:** carve / deposit ops, marching squares, Douglas-Peucker, flood fill, spatial queries, the Box2D adapter, the Phaser plugin, `DestructibleTerrain` GameObject, `PixelPerfectSprite`. See `docs-dev/02-roadmap.md` for the build sequence.
 
 ## When to use this skill
 
@@ -34,54 +31,60 @@ Do not apply this skill when:
 
 ## Core principle
 
-The bitmap is the source of truth. All visuals and physics colliders are
-derived from it. To modify the world, mutate the bitmap; the library
-handles propagation.
+The bitmap is the source of truth. All visuals and physics colliders are derived from it. To modify the world, mutate the bitmap; the library handles propagation.
 
-## Quickstart
+## Quickstart (target API, post-Phase-3)
 
 ```ts
 import Phaser from 'phaser';
 import { PixelPerfectPlugin } from 'pixel-perfect';
 
 const config: Phaser.Types.Core.GameConfig = {
-  type: Phaser.AUTO,
-  width: 1280,
-  height: 720,
-  scene: { create, update },
-  plugins: {
-    global: [{ key: 'PixelPerfect', plugin: PixelPerfectPlugin, start: true }],
-  },
+    type: Phaser.AUTO,
+    width: 1280,
+    height: 720,
+    scene: { create, update },
+    plugins: {
+        global: [{ key: 'PixelPerfect', plugin: PixelPerfectPlugin, start: true }],
+    },
 };
 
 new Phaser.Game(config);
 
 function create(this: Phaser.Scene) {
-  const terrain = this.pixelPerfect.terrain({
-    width: 4096,
-    height: 1024,
-    chunkSize: 128,
-    pixelsPerMeter: 32,
-    fromImage: 'island-mask',
-    materials: [
-      { id: 1, name: 'dirt', color: 0x8b5a3c, density: 1, friction: 0.7,
-        restitution: 0.1, destructible: true, destructionResistance: 0 },
-    ],
-    physicsWorld: this.box2dWorld,
-  });
+    const terrain = this.pixelPerfect.terrain({
+        width: 4096,
+        height: 1024,
+        chunkSize: 128,
+        pixelsPerMeter: 32,
+        fromImage: 'island-mask',
+        materials: [
+            {
+                id: 1,
+                name: 'dirt',
+                color: 0x8b5a3c,
+                density: 1,
+                friction: 0.7,
+                restitution: 0.1,
+                destructible: true,
+                destructionResistance: 0,
+            },
+        ],
+        physicsWorld: this.box2dWorld,
+    });
 
-  this.input.on('pointerdown', (p: Phaser.Input.Pointer) => {
-    terrain.carve.circle(p.worldX, p.worldY, 40);
-  });
+    this.input.on('pointerdown', (p: Phaser.Input.Pointer) => {
+        terrain.carve.circle(p.worldX, p.worldY, 40);
+    });
 
-  terrain.on('debris:detached', (debris) => {
-    console.log('detached:', debris.contour.length, 'vertices');
-  });
+    terrain.on('debris:detached', (debris) => {
+        console.log('detached:', debris.contour.length, 'vertices');
+    });
 }
 
 function update(this: Phaser.Scene) {
-  // The plugin auto-flushes pending physics rebuilds in postUpdate.
-  // Nothing to do here for terrain.
+    // The plugin auto-flushes pending physics rebuilds in postUpdate.
+    // Nothing to do here for terrain.
 }
 ```
 
@@ -95,19 +98,60 @@ A `width × height` byte grid. Each byte is a material ID. `0` = air, `1..255` =
 
 A fixed-size sub-region of the bitmap (default 128×128 pixels). All operations dirty chunks; rebuilds happen at chunk granularity.
 
+Each chunk carries two independent dirty flags:
+
+- `dirty` — collider rebuild pending. Cleared by the physics adapter via `bitmap.clearDirty(chunk)` after a successful rebuild.
+- `visualDirty` — texture upload pending. Cleared by the renderer via `bitmap.clearVisualDirty(chunk)` after a successful upload.
+
 ### Material
 
 A type with rendering and physics properties (color, density, friction, etc.). Registered up-front when creating a terrain.
 
 ### Contour
 
-A polygon outline extracted from the bitmap by marching squares. Used to build Box2D chain colliders and dynamic debris bodies.
+A polygon outline extracted from the bitmap by marching squares. Used to build Box2D chain colliders and dynamic debris bodies. Vertices are in world coordinates.
 
 ### Debris
 
 Solid bitmap regions that become disconnected from anchors after destruction. Detected by flood fill, converted to dynamic Box2D bodies.
 
-## Public API
+## Currently exposed core API (Phase 1, Week 1)
+
+The following surfaces are stable enough to use today. Higher-level wrappers (`scene.pixelPerfect.terrain`, etc.) build on these.
+
+### `new ChunkedBitmap({ width, height, chunkSize, materials? })`
+
+Creates a chunked byte grid sized `width × height`. `chunkSize` must divide both. Materials are optional at construction; the registry can be added to later via `bitmap.materials.register(material)`.
+
+### `bitmap.getPixel(x, y) → number`
+
+Returns the material id at world coords. Out-of-bounds returns `0` (treat-as-air); this simplifies neighbor sampling at world edges.
+
+### `bitmap.setPixel(x, y, materialId) → void`
+
+Writes a cell. Throws on out-of-bounds coordinates and on material ids outside `0..255`. Skips the dirty mark if the new value equals the current value (no spurious rebuilds for redundant carves).
+
+### `bitmap.getChunk(cx, cy) → Chunk`
+
+Returns a chunk by chunk-grid coords. Throws if out of range.
+
+### `bitmap.forEachDirtyChunk(callback)`
+
+Iterates dirty chunks in row-major (cy, cx) order — stable for replay debugging.
+
+### `bitmap.clearDirty(chunk)` / `bitmap.clearVisualDirty(chunk)`
+
+Independently clear the collider and visual flags. Call from the physics adapter and renderer respectively.
+
+### `bitmap.worldToChunk(x, y) → { cx, cy }` / `bitmap.worldToChunkLocal(x, y) → Point`
+
+Coordinate-conversion helpers.
+
+### `new MaterialRegistry(materials?)` / `registry.register(material)` / `registry.get(id)` / `registry.getOrThrow(id)`
+
+Material lookup. Ids must be integers in `1..255` (id 0 is reserved for air).
+
+## Public API (target shape, post-Phase-3)
 
 ### `scene.pixelPerfect.terrain(config)` → `DestructibleTerrain`
 
@@ -121,16 +165,23 @@ Creates a destructible terrain GameObject. Config:
 - `physicsWorld` — Phaser Box2D world reference.
 
 ### `terrain.carve.circle(x, y, radius)`
+
 ### `terrain.carve.polygon(points)`
+
 ### `terrain.carve.fromAlpha(x, y, textureKey, threshold?)`
+
 ### `terrain.deposit.circle(x, y, radius, materialId)`
+
 ### `terrain.deposit.polygon(points, materialId)`
 
 Mutate the bitmap. Affected chunks are dirtied; rebuild and visual update happen at end-of-frame.
 
 ### `terrain.isSolid(x, y) → boolean`
+
 ### `terrain.sampleMaterial(x, y) → number`
+
 ### `terrain.raycast(x1, y1, x2, y2) → HitResult | null`
+
 ### `terrain.surfaceY(x) → number`
 
 Spatial queries. Read directly from the bitmap; microsecond cost.
@@ -138,6 +189,7 @@ Spatial queries. Read directly from the bitmap; microsecond cost.
 ### `terrain.on(event, handler)`
 
 Events:
+
 - `'debris:detached'` — emitted when destruction creates an isolated solid region. Handler receives `{ contour, material, position }`.
 - `'chunk:rebuilt'` — emitted after a chunk's colliders are regenerated. Useful for debug overlays.
 
@@ -146,6 +198,7 @@ Events:
 Wraps a Phaser sprite with alpha-aware collision.
 
 ### `pixelSprite.overlapsPixelPerfect(other)` → `boolean`
+
 ### `pixelSprite.overlapsTerrain(terrain)` → `boolean`
 
 Alpha-aware overlap checks.
@@ -156,8 +209,8 @@ Alpha-aware overlap checks.
 
 ```ts
 function explode(x: number, y: number, radius: number) {
-  terrain.carve.circle(x, y, radius);
-  // Knockback nearby dynamic bodies (your game logic, not the library).
+    terrain.carve.circle(x, y, radius);
+    // Knockback nearby dynamic bodies (your game logic, not the library).
 }
 ```
 
@@ -172,8 +225,8 @@ const character = scene.add.sprite(spawnX, groundY - 16, 'character');
 
 ```ts
 terrain.on('debris:detached', ({ contour, material, position, body }) => {
-  const sprite = scene.add.image(position.x, position.y, 'debris-texture');
-  // Optionally attach the sprite to the body for rendering.
+    const sprite = scene.add.image(position.x, position.y, 'debris-texture');
+    // Optionally attach the sprite to the body for rendering.
 });
 ```
 
@@ -183,8 +236,8 @@ terrain.on('debris:detached', ({ contour, material, position, body }) => {
 this.load.image('island-mask', 'assets/island.png');
 // then:
 const terrain = scene.pixelPerfect.terrain({
-  /* ... */
-  fromImage: 'island-mask',
+    /* ... */
+    fromImage: 'island-mask',
 });
 ```
 
@@ -193,9 +246,9 @@ const terrain = scene.pixelPerfect.terrain({
 - **Modifying a terrain before `physicsWorld` exists.** Initialize Box2D first.
 - **Calling `carve` from inside a Box2D contact callback.** Defer to next frame; the rebuild queue assumes single-pass mutation.
 - **Expecting visuals to update synchronously after `carve`.** Updates happen at end-of-frame via `postUpdate`. If you need synchronous visual feedback (a flash), draw it yourself; don't rely on the chunk repaint.
-- **Using world coordinates above `width`/`height`.** Coordinates outside the bitmap are clamped silently in v1; this may become a thrown error in v1.1.
+- **Using world coordinates above `width`/`height`.** `getPixel` clamps silently to air; `setPixel` throws. Carve / deposit ops are responsible for clipping their footprints before calling `setPixel`.
 - **High-frequency tiny carves.** 1000 carves of radius 1 in one frame still rebuild only the affected chunks (cheap), but the per-call overhead adds up. Batch logically-grouped destruction into one larger carve when possible.
-- **Not registering all materials up-front.** Material IDs must exist before any pixel is painted with them.
+- **Not registering all materials up-front.** The `ChunkedBitmap` itself accepts any byte 0..255 in `setPixel`, but renderers and the physics adapter look up by id; an unregistered id will fall back to "unknown material" or throw at the consumer.
 - **Treating a `PixelPerfectSprite` as a normal sprite for performance.** The alpha bitmap is computed lazily on first overlap check. Pre-warm in `preload` if you have many.
 
 ## Performance notes
@@ -217,8 +270,8 @@ const terrain = scene.pixelPerfect.terrain({
 If the public API doesn't expose what you need:
 
 ```ts
-const bitmap = terrain.bitmap;            // ChunkedBitmap
-const adapter = terrain.physicsAdapter;   // Box2DAdapter
+const bitmap = terrain.bitmap; // ChunkedBitmap
+const adapter = terrain.physicsAdapter; // Box2DAdapter
 ```
 
 These are not stable APIs. Treat them as escape hatches; ideally file an issue describing the use case so a stable API can be added.
@@ -232,18 +285,3 @@ Include: Phaser version, Phaser Box2D version, repro steps, and ideally a minima
 ## License
 
 MIT.
-```
-
----
-
-## How to maintain this skill
-
-- Treat it as part of the public API. Update it when the public API changes.
-- Each Phase end (per `02-roadmap.md`), do a `SKILL.md` audit: are the documented APIs current? Are new pitfalls captured?
-- During Phase 5 (Docs & polish), this is finalized as the v1.0.0 reference.
-
-## Why this matters
-
-The Phaser v4 team chose to ship AI Agent skills inside their npm package. If pixel-perfect ever goes to npm, shipping a polished `SKILL.md` means consumers of the library can drop it into their Claude Code (or any other AI coding assistant) workflow with zero configuration. This is a small but real differentiator versus libraries that make consumers reverse-engineer the API from TypeScript types.
-
-Even before npm publication, having a clean `SKILL.md` in the repo means anyone cloning the project (you in 6 months, contributors, future-you debugging) gets correctly-grounded AI assistance immediately.
