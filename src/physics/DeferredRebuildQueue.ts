@@ -166,23 +166,35 @@ export class DeferredRebuildQueue {
 
         // Destroy every previously-tracked chunk that no longer has an
         // assignment. Snapshot the iterable first because destroyChunk
-        // mutates the adapter's internal map.
+        // mutates the adapter's internal map. Also clear cached
+        // contours so they don't outlive the body.
         const previouslyTracked = [...adapter.trackedChunks()];
         for (const chunk of previouslyTracked) {
             if (!newAssignments.has(chunk)) {
                 adapter.destroyChunk(chunk);
+                chunk.contours = null;
             }
+        }
+
+        // Wipe contour caches on every other chunk too — chunks that
+        // were never tracked (interior chunks of a previous blob, or
+        // freshly-air chunks) must not retain stale contour data.
+        for (const chunk of this.bitmap.chunks) {
+            if (!newAssignments.has(chunk)) chunk.contours = null;
         }
 
         // Rebuild the rep chunks. Sort for deterministic invocation order
         // (eases replay debugging and gives onChunkRebuilt a stable
-        // sequence).
+        // sequence). Also populate chunk.contours so debug renderers
+        // and consumers that want to inspect the collider shape can.
         const repsSorted = [...newAssignments.keys()].sort((a, b) => {
             if (a.cy !== b.cy) return a.cy - b.cy;
             return a.cx - b.cx;
         });
         for (const chunk of repsSorted) {
-            adapter.rebuildChunk(chunk, newAssignments.get(chunk)!);
+            const contours = newAssignments.get(chunk)!;
+            adapter.rebuildChunk(chunk, contours);
+            chunk.contours = contours;
             onChunkRebuilt?.(chunk);
         }
 

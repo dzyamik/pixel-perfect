@@ -12,6 +12,8 @@ import type {
     Point,
     HitResult,
 } from '../core/index.js';
+import { Box2DAdapter, DeferredRebuildQueue } from '../physics/index.js';
+import type { WorldId } from '../physics/index.js';
 import { TerrainRenderer } from './TerrainRenderer.js';
 
 /** Construction options for {@link DestructibleTerrain}. */
@@ -29,6 +31,18 @@ export interface DestructibleTerrainOptions {
     y?: number;
     /** Materials to register up-front. */
     materials?: readonly Material[];
+    /**
+     * Box2D world to attach colliders to. Optional — terrain works
+     * purely visually if you don't need physics. When provided, the
+     * terrain manages chunk collider lifecycle internally; carve /
+     * deposit calls dirty chunks and the next `update()` flushes the
+     * deferred queue.
+     */
+    worldId?: WorldId;
+    /** Pixels per Box2D meter. Defaults to 32 (Phaser Box2D convention). */
+    pixelsPerMeter?: number;
+    /** Douglas-Peucker simplification epsilon for collider contours. Default 1. */
+    simplificationEpsilon?: number;
 }
 
 /**
@@ -107,6 +121,12 @@ export class DestructibleTerrain {
             ),
     };
 
+    /**
+     * Physics integration. `null` when no `worldId` was supplied at
+     * construction (visual-only terrain).
+     */
+    readonly physics: TerrainPhysics | null;
+
     private readonly originX: number;
     private readonly originY: number;
 
@@ -132,6 +152,24 @@ export class DestructibleTerrain {
             x: this.originX,
             y: this.originY,
         });
+
+        if (options.worldId !== undefined) {
+            const adapter = new Box2DAdapter({
+                worldId: options.worldId,
+                pixelsPerMeter: options.pixelsPerMeter ?? 32,
+            });
+            const queue = new DeferredRebuildQueue(
+                options.simplificationEpsilon !== undefined
+                    ? {
+                          bitmap: this.bitmap,
+                          simplificationEpsilon: options.simplificationEpsilon,
+                      }
+                    : { bitmap: this.bitmap },
+            );
+            this.physics = { worldId: options.worldId, adapter, queue };
+        } else {
+            this.physics = null;
+        }
     }
 
     /** Material registry shared with the bitmap. */
@@ -140,10 +178,21 @@ export class DestructibleTerrain {
     }
 
     /**
-     * Call once per frame from the scene's `update()`. Repaints any
-     * chunks that were carved / deposited since last frame.
+     * Call once per frame from the scene's `update()`. Flushes pending
+     * collider rebuilds (if physics is enabled) and repaints any chunks
+     * carved / deposited since last frame.
+     *
+     * The physics flush runs BEFORE the visual repaint because rebuilds
+     * only clear `dirty` (collider) and visuals only clear
+     * `visualDirty` — the order matters only insofar as it affects
+     * which dirty flag is read by which step. With both flushes per
+     * frame, the order is moot but documenting it for clarity.
      */
     update(): void {
+        if (this.physics !== null) {
+            this.bitmap.forEachDirtyChunk((chunk) => this.physics!.queue.enqueueChunk(chunk));
+            this.physics.queue.flush(this.physics.adapter);
+        }
         this.renderer.repaintDirty();
     }
 
@@ -179,8 +228,25 @@ export class DestructibleTerrain {
         return Spatial.surfaceY(this.bitmap, x - this.originX) + this.originY;
     }
 
-    /** Tears down the terrain's render objects. Idempotent-ish. */
+    /** Tears down the terrain's render objects and physics bodies. */
     destroy(): void {
         this.renderer.destroy();
+        this.physics?.adapter.dispose();
     }
+}
+
+/** The physics integration of a {@link DestructibleTerrain}. */
+export interface TerrainPhysics {
+    /** Box2D world the terrain attaches its bodies to. */
+    readonly worldId: WorldId;
+    /**
+     * The body lifecycle adapter. Exposed so users can read the chunk
+     * body map or create their own (debris) bodies in the same world.
+     */
+    readonly adapter: Box2DAdapter;
+    /**
+     * The deferred rebuild queue. Exposed so users can `enqueueDebris`
+     * with their own contours when they detect detached chunks.
+     */
+    readonly queue: DeferredRebuildQueue;
 }
