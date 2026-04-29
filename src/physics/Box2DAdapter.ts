@@ -13,6 +13,20 @@ export interface Box2DAdapterOptions {
     worldId: WorldId;
     /** Pixel-to-meter conversion factor. Default is 32 (Phaser Box2D convention). */
     pixelsPerMeter?: number;
+    /**
+     * Scene-space pixel offset to apply to every body the adapter
+     * creates. The chunk's static body is placed here; debris bodies
+     * have this offset added to their pixel-space centroid before
+     * conversion to meters.
+     *
+     * Use this when the rendered terrain is not at scene origin (0, 0)
+     * — e.g. a centered terrain at scene `(104, 52)` should pass
+     * `originPx: { x: 104, y: 52 }` so that body positions map back to
+     * scene coordinates correctly.
+     *
+     * Default: `{ x: 0, y: 0 }`.
+     */
+    originPx?: { x: number; y: number };
     /** Default friction for terrain chain shapes (overridable per material). */
     defaultTerrainFriction?: number;
     /** Default restitution for terrain chain shapes. */
@@ -40,6 +54,8 @@ export interface Box2DAdapterOptions {
 export class Box2DAdapter {
     private readonly worldId: WorldId;
     private readonly pixelsPerMeter: number;
+    private readonly originPxX: number;
+    private readonly originPxY: number;
     private readonly defaultTerrainFriction: number;
     private readonly defaultTerrainRestitution: number;
     private readonly chunkBodies = new Map<Chunk, BodyId>();
@@ -47,6 +63,8 @@ export class Box2DAdapter {
     constructor(options: Box2DAdapterOptions) {
         this.worldId = options.worldId;
         this.pixelsPerMeter = options.pixelsPerMeter ?? 32;
+        this.originPxX = options.originPx?.x ?? 0;
+        this.originPxY = options.originPx?.y ?? 0;
         this.defaultTerrainFriction = options.defaultTerrainFriction ?? 0.7;
         this.defaultTerrainRestitution = options.defaultTerrainRestitution ?? 0;
     }
@@ -71,6 +89,8 @@ export class Box2DAdapter {
 
         const bodyDef = b2DefaultBodyDef();
         bodyDef.type = b2BodyType.b2_staticBody;
+        bodyDef.position.x = this.originPxX / this.pixelsPerMeter;
+        bodyDef.position.y = -this.originPxY / this.pixelsPerMeter;
         const bodyId = b2CreateBody(this.worldId, bodyDef);
 
         let attached = 0;
@@ -154,8 +174,11 @@ export class Box2DAdapter {
         const bodyDef = b2DefaultBodyDef();
         bodyDef.type = b2BodyType.b2_dynamicBody;
         // Position is in meters with y-flip (screen y-down → Box2D y-up).
-        bodyDef.position.x = cx / this.pixelsPerMeter;
-        bodyDef.position.y = -cy / this.pixelsPerMeter;
+        // Origin offset in pixels is added before the meter conversion so
+        // dynamic debris bodies use the same scene coordinate space as
+        // user-spawned bodies.
+        bodyDef.position.x = (cx + this.originPxX) / this.pixelsPerMeter;
+        bodyDef.position.y = -(cy + this.originPxY) / this.pixelsPerMeter;
         const bodyId = b2CreateBody(this.worldId, bodyDef);
 
         const polygonId = contourToPolygon(bodyId, localContour, {
