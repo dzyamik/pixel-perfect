@@ -15,6 +15,7 @@ Three layers, depends downward only:
 Detailed architecture: `docs-dev/01-architecture.md`.
 Roadmap: `docs-dev/02-roadmap.md`.
 Tooling: `docs-dev/03-tooling.md`.
+**Running progress + open issues: `docs-dev/PROGRESS.md`** — read this at session start to catch up on what's in flight.
 
 ## Hard rules
 
