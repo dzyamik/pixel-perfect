@@ -1,0 +1,57 @@
+{
+    "compilerOptions": {
+        "target": "ES2022",
+        "module": "ESNext",
+        "moduleResolution": "Bundler",
+        "lib": [
+            "ES2022",
+            "DOM",
+            "DOM.Iterable"
+        ],
+        "strict": true,
+        "noImplicitOverride": true,
+        "noUncheckedIndexedAccess": true,
+        "exactOptionalPropertyTypes": true,
+        "noFallthroughCasesInSwitch": true,
+        "noImplicitReturns": true,
+        "allowSyntheticDefaultImports": true,
+        "esModuleInterop": true,
+        "forceConsistentCasingInFileNames": true,
+        "isolatedModules": true,
+        "resolveJsonModule": true,
+        "skipLibCheck": true,
+        "declaration": true,
+        "declarationMap": true,
+        "sourceMap": true,
+        "outDir": "./dist",
+        "rootDir": "./",
+        "types": [
+            "vitest/globals",
+            "node"
+        ],
+        "paths": {
+            "@/*": [
+                "src/*"
+            ],
+            "@core/*": [
+                "src/core/*"
+            ],
+            "@physics/*": [
+                "src/physics/*"
+            ],
+            "@phaser/*": [
+                "src/phaser/*"
+            ]
+        }
+    },
+    "include": [
+        "src/**/*",
+        "tests/**/*",
+        "examples/**/*"
+    ],
+    "exclude": [
+        "node_modules",
+        "dist",
+        "docs"
+    ]
+}
