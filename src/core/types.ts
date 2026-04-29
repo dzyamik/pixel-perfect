@@ -99,3 +99,18 @@ export interface HitResult {
     /** Distance from the ray origin to the hit cell, in world units. */
     distance: number;
 }
+
+/**
+ * A connected component of solid cells that is not anchored.
+ *
+ * Produced by flood-fill island detection: solid cells reachable from
+ * the anchor set (e.g. the bottom row of the world) are considered part
+ * of the static terrain; everything else forms one or more `Island`s
+ * that the physics layer can promote into dynamic debris bodies.
+ */
+export interface Island {
+    /** Cells belonging to this island in BFS visitation order. */
+    cells: Point[];
+    /** Tight bounding box of the island, inclusive on both axes. */
+    bounds: { minX: number; minY: number; maxX: number; maxY: number };
+}

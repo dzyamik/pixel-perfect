@@ -14,8 +14,9 @@ Alpha. Under active development. APIs may change before v1.0.0.
 - `src/core/ops/Carve.ts` and `src/core/ops/Deposit.ts` — `circle(...)` and `polygon(...)`. Carve writes 0 (air); Deposit writes a caller-supplied material id. Same rasterizer underneath (`src/core/ops/raster.ts`). Sub-pixel coords supported; bounding box auto-clipped; degenerate inputs (radius ≤ 0, < 3 polygon vertices) are no-ops. Polygons use the even-odd fill rule, so self-intersecting shapes are handled correctly.
 - `src/core/algorithms/MarchingSquares.ts` — `extract(chunk, bitmap)` returns the per-chunk contour polygons in world coords. 1-pixel padding from neighbor chunks; saddle-point convention "TL-BR diagonal joined" is applied uniformly. Closed contours are emitted with `closed: true`; contours that pass through a chunk boundary come back as open chains for the physics adapter to stitch in Phase 2.
 - `src/core/algorithms/DouglasPeucker.ts` — `simplify(contour, epsilon)` reduces vertex count using Ramer-Douglas-Peucker. Closed contours are split at the vertex farthest from `points[0]` so each half has stable endpoints. Refuses to degenerate a closed contour below 3 vertices. Iterative (no recursion stack risk on long contours). Typical reduction: ≥ 80% on circle contours with `epsilon ≈ 1.0` pixel.
+- `src/core/algorithms/FloodFill.ts` — `findIslands(bitmap, anchor)` returns connected components of solid cells that are not reachable from the anchor set. Anchor strategies: `bottomRow` and `customPoints`. 4-connected BFS; out-of-bounds and air anchors are silent no-ops; islands carry `cells: Point[]` plus a tight `bounds` rect. Two-pass algorithm: first pass marks anchored cells, second pass collects unanchored solid components.
 
-**Not yet implemented:** `Carve.fromAlphaTexture`, flood fill, spatial queries, the Box2D adapter, the Phaser plugin, `DestructibleTerrain` GameObject, `PixelPerfectSprite`. See `docs-dev/02-roadmap.md` for the build sequence.
+**Not yet implemented:** `Carve.fromAlphaTexture`, spatial queries, the Box2D adapter, the Phaser plugin, `DestructibleTerrain` GameObject, `PixelPerfectSprite`. See `docs-dev/02-roadmap.md` for the build sequence.
 
 ## When to use this skill
 
@@ -173,6 +174,10 @@ Extracts contour polygons from one chunk. Output vertices are in world coordinat
 ### `DouglasPeucker.simplify(contour, epsilon) → Contour`
 
 Reduces a polyline's vertex count by removing interior points within `epsilon` of the chord between their kept neighbors. Endpoints are always preserved. For closed contours, the input is split at the vertex farthest from `points[0]` so each half is simplified as a well-anchored open polyline; the closure is restored before return. The algorithm refuses to reduce a closed contour below 3 vertices — degenerate inputs are returned unchanged so consumers can keep treating the result as a polygon. Use `epsilon ≈ 1.0` pixel for default destructible-terrain output; circle contours typically reduce by ≥ 80%.
+
+### `FloodFill.findIslands(bitmap, anchor) → Island[]`
+
+Returns every connected component of solid cells that is not reachable from the anchor set. `anchor` is `{ kind: 'bottomRow' }` (treats every solid cell on the world's bottom row as anchored) or `{ kind: 'customPoints', points }` (caller-supplied anchors; air and out-of-bounds points are silently ignored). 4-connected BFS — diagonal-only contacts produce separate islands. Each `Island` carries `cells: Point[]` (BFS order) and `bounds: { minX, maxX, minY, maxY }` (inclusive). Use this in the destruction pipeline to identify newly-detached debris that should become dynamic Box2D bodies.
 
 ## Public API (target shape, post-Phase-3)
 
