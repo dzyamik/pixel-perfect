@@ -11,9 +11,9 @@ Alpha. Under active development. APIs may change before v1.0.0.
 - `src/core/types.ts` — shared types: `Point`, `Material`, `Contour`, `Chunk`, `HitResult`.
 - `src/core/Materials.ts` — `MaterialRegistry` (id-validated material lookup).
 - `src/core/ChunkedBitmap.ts` — chunked byte grid, dirty tracking, pixel I/O, coordinate conversion.
-- `src/core/ops/Carve.ts` — `circle(bitmap, cx, cy, radius)` and `polygon(bitmap, points)`. Sub-pixel coords supported; bounding box auto-clipped; degenerate inputs (radius ≤ 0, < 3 polygon vertices) are no-ops. Polygons use the even-odd fill rule, so self-intersecting shapes carve correctly.
+- `src/core/ops/Carve.ts` and `src/core/ops/Deposit.ts` — `circle(...)` and `polygon(...)`. Carve writes 0 (air); Deposit writes a caller-supplied material id. Same rasterizer underneath (`src/core/ops/raster.ts`). Sub-pixel coords supported; bounding box auto-clipped; degenerate inputs (radius ≤ 0, < 3 polygon vertices) are no-ops. Polygons use the even-odd fill rule, so self-intersecting shapes are handled correctly.
 
-**Not yet implemented:** `Carve.fromAlphaTexture`, `Deposit.*`, marching squares, Douglas-Peucker, flood fill, spatial queries, the Box2D adapter, the Phaser plugin, `DestructibleTerrain` GameObject, `PixelPerfectSprite`. See `docs-dev/02-roadmap.md` for the build sequence.
+**Not yet implemented:** `Carve.fromAlphaTexture`, marching squares, Douglas-Peucker, flood fill, spatial queries, the Box2D adapter, the Phaser plugin, `DestructibleTerrain` GameObject, `PixelPerfectSprite`. See `docs-dev/02-roadmap.md` for the build sequence.
 
 ## When to use this skill
 
@@ -159,6 +159,10 @@ Sets every cell within `radius` of `(cx, cy)` to air. Cells at exactly `radius` 
 ### `Carve.polygon(bitmap, points) → void`
 
 Sets every cell inside the closed polygon to air. The polygon is implicitly closed (the last point connects back to the first). Filling uses the even-odd rule, so self-intersecting polygons carve correctly (a bowtie carves both lobes; the central crossing region is left untouched). Polygons with fewer than 3 vertices are no-ops; the scanline range is clipped to the bitmap, so polygons that fall outside are silent.
+
+### `Deposit.circle(bitmap, cx, cy, radius, materialId) → void` / `Deposit.polygon(bitmap, points, materialId) → void`
+
+Same shapes and clipping as `Carve.*`, but writes `materialId` instead of air. Throws (via `setPixel`) if `materialId` is outside `0..255`. The id is not validated against the bitmap's material registry — callers may use unregistered ids if they own their own renderer / lookup pipeline (the renderer or physics adapter will surface the bad id when it tries to look up properties).
 
 ## Public API (target shape, post-Phase-3)
 
