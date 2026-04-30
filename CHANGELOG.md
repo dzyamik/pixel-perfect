@@ -2,12 +2,56 @@
 
 All notable changes to this project will be documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) loosely; this project does not yet publish to npm.
 
-## Unreleased — Phase 3 (in progress)
+## Unreleased — Phase 3 (mostly done)
 
-- `src/phaser/` — `TerrainRenderer` (per-chunk canvas-backed visuals), `DestructibleTerrain` composite GameObject with optional Box2D physics integration. The `chunk.contours` field is now populated on rebuild so debug renderers can read live colliders.
-- Three runnable demos under `examples/`: basic rendering, click to carve, physics with falling balls + collider debug overlay.
-- Demo deployment workflow: Vite builds into `docs/` (committed). No CI; run `npm run build` manually before pushing demo changes you want published. The vite config uses `base: './'` so the output works at any URL prefix (root, `/pixel-perfect/`, `file://`, etc.).
-- `.gitignore` cleaned up: removed obsolete `dist-examples/` (no longer used) and `docs/site/` / `docs/api/` (VitePress / TypeDoc not yet wired up).
+The Phaser layer is feature-complete for terrain. `PixelPerfectSprite`
+(alpha-aware sprite collision) is the last Phase 3 deliverable; tagged
+`v0.3.0` will be cut after that lands.
+
+### Added — `src/phaser/`
+
+- `TerrainRenderer` — per-chunk canvas-backed visuals. Each chunk gets its own `<canvas>` registered via `textures.addCanvas`, repainted from the bitmap on `repaintDirty()`.
+- `DestructibleTerrain` — composite GameObject. Owns the bitmap, renderer, and (optionally) the physics adapter + queue. Public surface: `carve.{circle,polygon,fromAlphaTexture}`, `deposit.{...}`, `isSolid`, `sampleMaterial`, `raycast`, `surfaceY`, `extractDebris`, `update`. All scene-coord in / scene-coord out. The `chunk.contours` field is populated on rebuild so debug renderers can read live colliders. Origin alignment: optional `x`/`y` constructor options shift both rendering and physics-body placement.
+- `PixelPerfectPlugin` — `Phaser.Plugins.ScenePlugin`. Mapped to `scene.pixelPerfect`. Provides `terrain(options)` factory (scene supplied automatically), tracks created terrains, auto-flushes them on `POST_UPDATE`, auto-destroys on `SHUTDOWN` / `DESTROY`. Module-augments `Phaser.Scene` so `pixelPerfect` is typed.
+
+### Changed — collider model
+
+Per-chunk colliders, two-sided polygon shapes (triangulated via
+[earcut](https://github.com/mapbox/earcut)). This replaces both the
+v0.2.0 per-chunk chain-shape model and the v0.2.5 per-blob global
+rebuild — the latter is gone, the former is a different shape type.
+Why each step:
+
+- **Polygon triangulation** instead of `b2ChainShape`. Two-sided polygons resolve penetration on either side, fixing the wrong-side tunnelling that one-sided chains caused under continuous-carve drag. Also fixes the "non-convex L-shaped debris doesn't act solid" bug — earcut handles non-convex outlines directly, no chain fallback needed.
+- **Per-chunk** rebuild (the 2.5 stitching is now obsolete). Each chunk's solid mass is independently triangulated; carving in chunk A no longer rebuilds chunks B…N. Bodies on those chunks keep their static body and contacts intact, so carving on the opposite side of the world doesn't wake settled bodies.
+- **Snapshot/restore** of dynamic bodies across each rebuild. `Box2DAdapter.snapshotDynamicBodies` queries `b2World_OverlapAABB` over the dirty-chunks AABB, saves `(transform, linearVelocity, angularVelocity, awake)` per body, and writes them back after the rebuild. Sleeping settled bodies stay asleep through the carve. The awake restore is gated by a follow-up `b2Body_ComputeAABB` + overlap check so a body whose support is *actually* carved out wakes and falls naturally instead of hanging in midair (the "ghost float" bug).
+
+### Added — earcut, support detection, rotation handling
+
+- `earcut` (npm) wired into `ContourToBody.contourToTriangles(bodyId, contour, options)`. Each triangle attaches as a separate `b2PolygonShape` via `b2ComputeHull` + `b2MakePolygon` + `b2CreatePolygonShape`. Replaces the old "polygon-or-chain" branch in `Box2DAdapter`.
+- `chunkToContours(chunk, bitmap, epsilon)` — single-chunk extraction with 1px air padding so every contour closes locally; replaces the global `componentToContours` call in the queue's hot path. `componentToContours` itself stays for `DebrisDetector`.
+- Box2D binding surface extended: `b2AABB`, `b2Rot` (constructor), `b2DefaultQueryFilter`, `b2World_OverlapAABB`, `b2Shape_GetBody`, `b2Body_ComputeAABB`, transform/velocity/awake getters and setters. The `b2Rot` instance is required for `b2Body_SetTransform` — passing a plain `{c, s}` literal aliases it into `bodySim.rotation0` and crashes the next world step on `copyTo` (the literal has no `clone()` method).
+
+### Demos
+
+Four runnable demos under `examples/`, all built into `docs/` (committed):
+
+- 01 — basic rendering: `TerrainRenderer` painting a procedural bitmap.
+- 02 — click to carve: input + carve + per-chunk repaint.
+- 03 — physics colliders: Box2D world, drop balls, debug overlay.
+- 04 — falling debris: `DebrisDetector` + dynamic bodies; floating brick falls on load, shelves drop as L-shapes when their necks are severed.
+
+Demo 04 is the verification path for the plugin migration: it uses `this.pixelPerfect.terrain({...})` instead of `new DestructibleTerrain(...)`.
+
+Build / deploy: `npm run build` writes the demo bundle into `docs/` (committed). No CI; rebuild and commit alongside source changes. The vite config uses `base: './'` so the output works at any URL prefix (root, `/pixel-perfect/`, `file://`, etc.).
+
+### Known limitations carried into v0.3.x / Phase 4
+
+- Sub-pixel jitter on bodies in the chunk being **actively** carved during continuous drag. Bodies on other chunks are unaffected. See `docs-dev/PROGRESS.md` § "KNOWN LIMITATIONS" for the mechanism, when to revisit, and three candidate fixes ranked by effort.
+
+### Tests
+
+Test suite is now 212 across 17 files, ~1.5 s. typecheck and lint clean. Coverage targets unchanged.
 
 ---
 

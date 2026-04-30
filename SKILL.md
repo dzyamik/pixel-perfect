@@ -6,24 +6,25 @@
 
 Alpha. Under active development. APIs may change before v1.0.0.
 
-**Currently implemented — Phase 1 + 2 + 2.5 (`v0.2.5`):**
+Phase progression:
 
-- `src/core/types.ts` — shared types: `Point`, `Material`, `Contour`, `Chunk`, `HitResult`.
-- `src/core/Materials.ts` — `MaterialRegistry` (id-validated material lookup).
-- `src/core/ChunkedBitmap.ts` — chunked byte grid, dirty tracking, pixel I/O, coordinate conversion.
-- `src/core/ops/Carve.ts` and `src/core/ops/Deposit.ts` — `circle`, `polygon`, and `fromAlphaTexture`. Carve writes 0 (air); Deposit writes a caller-supplied material id. Same rasterizer underneath (`src/core/ops/raster.ts`). Sub-pixel coords supported; bounding box auto-clipped; degenerate inputs (radius ≤ 0, < 3 polygon vertices, zero-sized source) are no-ops. Polygons use the even-odd fill rule, so self-intersecting shapes are handled correctly. `fromAlphaTexture` accepts any structural `AlphaSource = { data: Uint8ClampedArray, width, height }`, which `ImageData` satisfies — core never imports a DOM type.
-- `src/core/algorithms/MarchingSquares.ts` — `extract(chunk, bitmap)` returns the per-chunk contour polygons in world coords. 1-pixel padding from neighbor chunks; saddle-point convention "TL-BR diagonal joined" is applied uniformly. Closed contours are emitted with `closed: true`; contours that pass through a chunk boundary come back as open chains for the physics adapter to stitch in Phase 2.
-- `src/core/algorithms/DouglasPeucker.ts` — `simplify(contour, epsilon)` reduces vertex count using Ramer-Douglas-Peucker. Closed contours are split at the vertex farthest from `points[0]` so each half has stable endpoints. Refuses to degenerate a closed contour below 3 vertices. Iterative (no recursion stack risk on long contours). Typical reduction: ≥ 80% on circle contours with `epsilon ≈ 1.0` pixel.
-- `src/core/algorithms/FloodFill.ts` — `findIslands(bitmap, anchor)` returns connected components of solid cells that are not reachable from the anchor set. Anchor strategies: `bottomRow` and `customPoints`. 4-connected BFS; out-of-bounds and air anchors are silent no-ops; islands carry `cells: Point[]` plus a tight `bounds` rect. Two-pass algorithm: first pass marks anchored cells, second pass collects unanchored solid components.
-- `src/core/queries/Spatial.ts` — `isSolid`, `sampleMaterial`, `surfaceY`, `findGroundBelow`, `raycast` (Bresenham). All read directly from the bitmap; out-of-world coordinates are treated as air.
+- ✅ **Phase 1 — `src/core/`** (`v0.1.0`): `ChunkedBitmap`, `Materials`, `Carve` / `Deposit` (circle / polygon / fromAlphaTexture), `MarchingSquares`, `DouglasPeucker`, `FloodFill`, `Spatial` queries.
+- ✅ **Phase 2 — `src/physics/`** (`v0.2.0`): typed `phaser-box2d` binding, `Box2DAdapter` (static terrain + dynamic debris bodies), `DeferredRebuildQueue` (end-of-frame body churn), `DebrisDetector` (FloodFill + contour extraction).
+- ✅ Phase 2.5 retired and superseded by Phase 3's per-chunk + polygon-triangulation collider model. Cross-chunk stitching is no longer required.
+- 🟡 **Phase 3 — `src/phaser/`** (in flight): `TerrainRenderer`, `DestructibleTerrain` GameObject, `PixelPerfectPlugin` (the public entry point — `scene.pixelPerfect.terrain({...})`). Collider model is now per-chunk, two-sided polygons triangulated via earcut. `PixelPerfectSprite` (alpha-aware sprite collision) is the last Phase 3 deliverable.
+- ⬜ Phase 4 — examples (Worms-style demo, image-based terrain, more).
+- ⬜ Phase 5 — docs & polish.
 
-**Phase 1 (`v0.1.0`) — `src/core/`:** ChunkedBitmap, Materials, Carve / Deposit (circle / polygon / fromAlphaTexture), MarchingSquares, DouglasPeucker, FloodFill, Spatial queries.
+The four runnable demos are in `examples/`, built into `docs/`:
 
-**Phase 2 (`v0.2.0`) — `src/physics/`:** typed `phaser-box2d` binding, `ContourToBody` (chain + polygon), `Box2DAdapter` (static terrain bodies + dynamic debris), `DeferredRebuildQueue` (end-of-frame body churn), `DebrisDetector` (FloodFill + contour extraction).
+| Demo | What it shows |
+|---|---|
+| 01 — basic rendering | TerrainRenderer painting a procedural bitmap |
+| 02 — click to carve | input + carve + per-chunk repaint |
+| 03 — physics colliders | Box2D world, drop balls, debug overlay |
+| 04 — falling debris | DebrisDetector + dynamic bodies, L-shaped pieces falling |
 
-**Phase 2.5 (`v0.2.5`) — cross-chunk stitching.** `DeferredRebuildQueue.flush` runs a per-blob global rebuild: `FloodFill.findAllComponents` finds every connected solid component, `ContourExtractor.componentToContours` extracts each component's closed contour(s) via a single-chunk temp bitmap, and each component is routed to a representative chunk (the one containing its lex-smallest cell). Result: large blobs spanning many chunks produce one coherent body each, instead of failing to produce colliders.
-
-**Not yet implemented (Phase 3+):** the Phaser plugin, `DestructibleTerrain` GameObject, `PixelPerfectSprite`, `DynamicTexture` chunk renderer. See `docs-dev/02-roadmap.md` for the build sequence.
+For current in-flight work and known limitations, see `docs-dev/PROGRESS.md`.
 
 ## When to use this skill
 
@@ -44,60 +45,67 @@ Do not apply this skill when:
 
 The bitmap is the source of truth. All visuals and physics colliders are derived from it. To modify the world, mutate the bitmap; the library handles propagation.
 
-## Quickstart (target API, post-Phase-3)
+## Quickstart
 
 ```ts
-import Phaser from 'phaser';
+import * as Phaser from 'phaser';
 import { PixelPerfectPlugin } from 'pixel-perfect';
 
-const config: Phaser.Types.Core.GameConfig = {
+class GameScene extends Phaser.Scene {
+    create() {
+        const terrain = this.pixelPerfect.terrain({
+            width: 1024,
+            height: 512,
+            chunkSize: 64,
+            pixelsPerMeter: 32,
+            x: 64,
+            y: 64,
+            materials: [
+                {
+                    id: 1,
+                    name: 'dirt',
+                    color: 0x8b5a3c,
+                    density: 1,
+                    friction: 0.7,
+                    restitution: 0.1,
+                    destructible: true,
+                    destructionResistance: 0,
+                },
+            ],
+            // worldId: yourBox2DWorldId, // optional — physics integration
+            // onDebrisCreated: ({ bodyId, contour, material }) => { /* ... */ },
+        });
+
+        this.input.on('pointerdown', (p: Phaser.Input.Pointer) => {
+            terrain.carve.circle(p.worldX, p.worldY, 40);
+        });
+    }
+}
+
+new Phaser.Game({
     type: Phaser.AUTO,
     width: 1280,
     height: 720,
-    scene: { create, update },
+    scene: GameScene,
+    // Register the plugin once. `mapping: 'pixelPerfect'` is what
+    // makes `scene.pixelPerfect` available inside any scene.
     plugins: {
-        global: [{ key: 'PixelPerfect', plugin: PixelPerfectPlugin, start: true }],
-    },
-};
-
-new Phaser.Game(config);
-
-function create(this: Phaser.Scene) {
-    const terrain = this.pixelPerfect.terrain({
-        width: 4096,
-        height: 1024,
-        chunkSize: 128,
-        pixelsPerMeter: 32,
-        fromImage: 'island-mask',
-        materials: [
+        scene: [
             {
-                id: 1,
-                name: 'dirt',
-                color: 0x8b5a3c,
-                density: 1,
-                friction: 0.7,
-                restitution: 0.1,
-                destructible: true,
-                destructionResistance: 0,
+                key: 'PixelPerfectPlugin',
+                plugin: PixelPerfectPlugin,
+                mapping: 'pixelPerfect',
             },
         ],
-        physicsWorld: this.box2dWorld,
-    });
-
-    this.input.on('pointerdown', (p: Phaser.Input.Pointer) => {
-        terrain.carve.circle(p.worldX, p.worldY, 40);
-    });
-
-    terrain.on('debris:detached', (debris) => {
-        console.log('detached:', debris.contour.length, 'vertices');
-    });
-}
-
-function update(this: Phaser.Scene) {
-    // The plugin auto-flushes pending physics rebuilds in postUpdate.
-    // Nothing to do here for terrain.
-}
+    },
+});
 ```
+
+The plugin auto-flushes terrain rebuilds and chunk repaints on the
+scene's `POST_UPDATE` event. Demos that step a Box2D world themselves
+inside `update()` should still call `terrain.update()` manually before
+the step so colliders are fresh — see `examples/03-physics/main.ts`
+and `examples/04-falling-debris/main.ts` for the pattern.
 
 ## Concepts
 
@@ -206,18 +214,27 @@ Bounded version of `surfaceY`. Walks at most `maxDist` rows starting at `y` (inc
 
 Bresenham line walk from `(x1, y1)` to `(x2, y2)`. Returns the first solid cell encountered, with its material id and Euclidean distance from the start, or `null` for an air-only path. Endpoints are floored to integers internally; rays starting on solid return the start cell with distance 0.
 
-## Public API (target shape, post-Phase-3)
+## Public API (Phaser layer)
 
-### `scene.pixelPerfect.terrain(config)` → `DestructibleTerrain`
+### `scene.pixelPerfect.terrain(options)` → `DestructibleTerrain`
 
-Creates a destructible terrain GameObject. Config:
+Plugin factory. Creates a destructible terrain whose scene is
+auto-supplied; the returned terrain is registered with the plugin
+for auto-update and auto-destroy. Equivalent direct constructor:
+`new DestructibleTerrain({ scene: this, ...options })`.
 
-- `width`, `height` — world size in pixels.
-- `chunkSize` — default 128.
-- `pixelsPerMeter` — default 32.
-- `fromImage` — Phaser texture key with alpha; non-zero alpha becomes solid.
-- `materials` — array of `Material` definitions.
-- `physicsWorld` — Phaser Box2D world reference.
+Options:
+
+- `width`, `height` — world size in pixels (must divide `chunkSize`).
+- `chunkSize` — default 64.
+- `x`, `y` — top-left of the terrain in scene coordinates. Default `(0, 0)`.
+- `pixelsPerMeter` — default 32 (matches Phaser Box2D convention).
+- `materials` — array of `Material` definitions to register with the bitmap.
+- `worldId` — optional Box2D world id. Without it, the terrain is purely visual (carve/deposit/queries still work; no colliders).
+- `simplificationEpsilon` — Douglas-Peucker epsilon for collider contours. Default 1.
+- `onDebrisCreated` — callback invoked once per debris body the queue creates, after `extractDebris()` detaches an island.
+
+To stamp a PNG mask onto an existing terrain, use `terrain.carve.fromAlphaTexture(source, dstX, dstY, threshold?)` or the matching `terrain.deposit.fromAlphaTexture(...)`.
 
 ### `terrain.carve.circle(x, y, radius)`
 
@@ -241,12 +258,29 @@ Mutate the bitmap. Affected chunks are dirtied; rebuild and visual update happen
 
 Spatial queries. Read directly from the bitmap; microsecond cost.
 
-### `terrain.on(event, handler)`
+### `terrain.extractDebris(anchor?, simplificationEpsilon?)`
 
-Events:
+Detects every connected solid component that is not anchored, removes
+its cells from the bitmap, and (when physics is enabled) enqueues a
+dynamic body for each. Returns the detected debris as
+`DebrisInfo[]` with scene-coordinate contours and bounds, ready for
+the caller to spawn its own visuals. Anchor strategy defaults to
+`{ kind: 'bottomRow' }`.
 
-- `'debris:detached'` — emitted when destruction creates an isolated solid region. Handler receives `{ contour, material, position }`.
-- `'chunk:rebuilt'` — emitted after a chunk's colliders are regenerated. Useful for debug overlays.
+### Debris callback (set at construction)
+
+Pass `onDebrisCreated: ({ bodyId, contour, material }) => { ... }`
+when constructing the terrain. The plugin's
+`scene.pixelPerfect.terrain({ ... })` factory accepts this option.
+The callback fires once per dynamic body the queue creates, with the
+bitmap-space outer contour and the material used for the body's
+physical properties. Body lifetime is the caller's responsibility —
+debris bodies are not destroyed by the terrain itself.
+
+There is currently no `chunk:rebuilt` event on the terrain; if you
+need that for a debug overlay, pass `onChunkRebuilt` to a
+`DeferredRebuildQueue.flush(...)` call directly. Or read
+`terrain.bitmap.chunks[*].contours` after `terrain.update()`.
 
 ### `scene.pixelPerfect.sprite(scene, x, y, textureKey)` → `PixelPerfectSprite`
 
@@ -279,21 +313,48 @@ const character = scene.add.sprite(spawnX, groundY - 16, 'character');
 ### Handling falling debris
 
 ```ts
-terrain.on('debris:detached', ({ contour, material, position, body }) => {
-    const sprite = scene.add.image(position.x, position.y, 'debris-texture');
-    // Optionally attach the sprite to the body for rendering.
+const terrain = this.pixelPerfect.terrain({
+    // ...
+    onDebrisCreated: ({ bodyId, contour, material }) => {
+        // contour is in bitmap coords; the body sits at the contour
+        // centroid translated to the terrain's scene origin. Build a
+        // Phaser.Graphics traced from the contour minus its centroid
+        // (so it rotates around the body's COM) — see
+        // examples/04-falling-debris/main.ts for the reference impl.
+    },
 });
+
+// Trigger detection — typically once per frame after potentially
+// detaching carves. extractDebris() removes cells from the bitmap
+// and enqueues dynamic bodies for the next plugin update.
+this.terrain.extractDebris();
 ```
 
 ### Procedural island from PNG
 
 ```ts
+// In preload():
 this.load.image('island-mask', 'assets/island.png');
-// then:
-const terrain = scene.pixelPerfect.terrain({
-    /* ... */
-    fromImage: 'island-mask',
+
+// In create():
+const terrain = this.pixelPerfect.terrain({
+    width: 1024,
+    height: 512,
+    chunkSize: 64,
+    materials: [/* ... */],
 });
+
+// Stamp the mask: anywhere alpha is >= threshold becomes solid
+// material id 1.
+const tex = this.textures.get('island-mask');
+const src = tex.getSourceImage() as HTMLImageElement;
+const tmp = document.createElement('canvas');
+tmp.width = src.width;
+tmp.height = src.height;
+const ctx = tmp.getContext('2d')!;
+ctx.drawImage(src, 0, 0);
+const imageData = ctx.getImageData(0, 0, src.width, src.height);
+terrain.deposit.fromAlphaTexture(imageData, 0, 0, 1, 128);
 ```
 
 ## Pitfalls
@@ -318,15 +379,16 @@ const terrain = scene.pixelPerfect.terrain({
 
 - **World coords** — what you pass to public APIs. Pixels in your Phaser world.
 - **Bitmap coords** — internal. 1:1 with world coords by default; configurable via `pixelsPerMeter`.
-- **Box2D coords (meters)** — handled by the adapter. Don't see these unless you reach into `terrain.physicsAdapter` directly.
+- **Box2D coords (meters)** — handled by the adapter. Don't see these unless you reach into `terrain.physics?.adapter` directly.
 
 ## When you need to escape
 
 If the public API doesn't expose what you need:
 
 ```ts
-const bitmap = terrain.bitmap; // ChunkedBitmap
-const adapter = terrain.physicsAdapter; // Box2DAdapter
+const bitmap = terrain.bitmap;          // ChunkedBitmap
+const adapter = terrain.physics?.adapter; // Box2DAdapter | undefined
+const queue = terrain.physics?.queue;     // DeferredRebuildQueue | undefined
 ```
 
 These are not stable APIs. Treat them as escape hatches; ideally file an issue describing the use case so a stable API can be added.
