@@ -1,5 +1,11 @@
 import type Phaser from 'phaser';
-import { Carve, ChunkedBitmap, Deposit, Spatial } from '../core/index.js';
+import {
+    Carve,
+    CellularAutomaton,
+    ChunkedBitmap,
+    Deposit,
+    Spatial,
+} from '../core/index.js';
 import type {
     AlphaSource,
     Contour,
@@ -60,6 +66,19 @@ export interface DestructibleTerrainOptions {
      * not destroyed by the terrain itself.
      */
     onDebrisCreated?: (event: DebrisCreatedEvent) => void;
+    /**
+     * When `true`, `update()` runs one cellular-automaton tick before
+     * the renderer/physics flush. Default `false` for back-compat —
+     * v1.x users get the same behavior they had. Enable when any
+     * registered material has `simulation: 'sand'` (or other future
+     * fluid kinds) so the bitmap is stepped automatically each frame.
+     *
+     * The simulation tick is `O(width × height)` per call. For very
+     * large bitmaps without fluid materials in flight, leaving this
+     * `false` and calling `terrain.simStep()` manually only when you
+     * know fluid pixels exist is a worthwhile optimization.
+     */
+    autoSimulate?: boolean;
 }
 
 /**
@@ -154,12 +173,16 @@ export class DestructibleTerrain {
     private readonly onDebrisCreated:
         | ((event: DebrisCreatedEvent) => void)
         | undefined;
+    private readonly autoSimulate: boolean;
+    /** Tick counter for the cellular-automaton step; flips L/R bias. */
+    private simTick = 0;
 
     constructor(options: DestructibleTerrainOptions) {
         const chunkSize = options.chunkSize ?? 64;
         this.originX = options.x ?? 0;
         this.originY = options.y ?? 0;
         this.onDebrisCreated = options.onDebrisCreated;
+        this.autoSimulate = options.autoSimulate ?? false;
 
         this.bitmap = new ChunkedBitmap(
             options.materials !== undefined
@@ -205,9 +228,28 @@ export class DestructibleTerrain {
     }
 
     /**
+     * Runs one cellular-automaton tick over the bitmap. Materials with
+     * `simulation: 'sand'` (and any future fluid kinds) move; static
+     * materials don't. The tick counter is auto-incremented so
+     * successive calls alternate L/R bias.
+     *
+     * Cost: `O(width × height)` per call. For very large bitmaps,
+     * consider gating on a "are there any fluid pixels in flight?"
+     * flag.
+     */
+    simStep(): void {
+        CellularAutomaton.step(this.bitmap, this.simTick);
+        this.simTick++;
+    }
+
+    /**
      * Call once per frame from the scene's `update()`. Flushes pending
      * collider rebuilds (if physics is enabled) and repaints any chunks
      * carved / deposited since last frame.
+     *
+     * If `autoSimulate` was enabled at construction, runs one
+     * cellular-automaton tick BEFORE the rebuild flush so the static
+     * collider snapshot reflects the post-tick bitmap.
      *
      * The physics flush runs BEFORE the visual repaint because rebuilds
      * only clear `dirty` (collider) and visuals only clear
@@ -216,6 +258,7 @@ export class DestructibleTerrain {
      * frame, the order is moot but documenting it for clarity.
      */
     update(): void {
+        if (this.autoSimulate) this.simStep();
         if (this.physics !== null) {
             this.bitmap.forEachDirtyChunk((chunk) => this.physics!.queue.enqueueChunk(chunk));
             this.physics.queue.flush(

@@ -12,5 +12,14 @@ export * as FloodFill from './algorithms/FloodFill.js';
 export * as MarchingSquares from './algorithms/MarchingSquares.js';
 export * as AlphaOverlap from './queries/AlphaOverlap.js';
 export type { AlphaMask } from './queries/AlphaOverlap.js';
+export * as CellularAutomaton from './algorithms/CellularAutomaton.js';
 export * as Spatial from './queries/Spatial.js';
-export type { Chunk, Contour, HitResult, Island, Material, Point } from './types.js';
+export type {
+    Chunk,
+    Contour,
+    HitResult,
+    Island,
+    Material,
+    Point,
+    SimulationKind,
+} from './types.js';

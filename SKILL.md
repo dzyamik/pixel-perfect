@@ -13,7 +13,9 @@ Phase progression:
 - ✅ Phase 2.5 retired and superseded by Phase 3's per-chunk + polygon-triangulation collider model. Cross-chunk stitching is no longer required.
 - ✅ **Phase 3 — `src/phaser/`** (`v0.3.0`): `TerrainRenderer`, `DestructibleTerrain` GameObject, `PixelPerfectPlugin` (the public entry point — `scene.pixelPerfect.terrain({...})`, `.sprite(...)`), `PixelPerfectSprite` (alpha-aware sprite-vs-sprite + sprite-vs-terrain collision). Collider model is per-chunk, two-sided polygons triangulated via earcut, with snapshot/restore of dynamic bodies across each rebuild.
 - ✅ **Phase 4 — examples + perf pass** (`v0.4.0`): Worms-style demo (`06`), image-based terrain demo (`07`), and a ~10× speedup on the `TerrainRenderer` hot loop via packed-RGBA LUT + `Uint32Array` view of `ImageData`.
-- 🟡 **Phase 5 — docs & polish** (in flight): TypeDoc API ref, CONTRIBUTING / CoC / issue templates landed; remaining items are a hero gif and the `v1.0.0` final pass.
+- ✅ **Phase 5 — docs & polish** (`v1.0.0`): TypeDoc API ref, CONTRIBUTING / CoC / issue templates, hero gif.
+- ✅ **v1.1 — `PixelPerfectSprite` scaling + rotation, jitter fix** (`v1.1.0`): both v1 sprite limitations lifted; the residual sub-pixel jitter on actively-carved chunks closed via force-settle in `Box2DAdapter.restoreDynamicBodies`.
+- ✅ **v2 — cellular-automaton falling sand** (`v2.0.0`): `Material.simulation: 'static' | 'sand'`, `CellularAutomaton.step`, `DestructibleTerrain.simStep` + `autoSimulate` opt-in, demo 09. Static-only collider filtering means per-frame sand motion doesn't trigger physics rebuilds.
 
 The seven runnable demos are in `examples/`, built into `docs/`:
 
@@ -26,6 +28,8 @@ The seven runnable demos are in `examples/`, built into `docs/`:
 | 05 — pixel-perfect sprite | drag a circle onto a ring + terrain; bbox vs pixel-perfect overlap |
 | 06 — worms-style | walking circle + grenades that carve and detach cliff slabs |
 | 07 — image-based terrain | stamp a PNG / canvas alpha mask onto the bitmap, then carve |
+| 08 — sprite playground | upload a PNG, see its alpha mask outlined, scale + rotate the sprite; AABB vs pixel-perfect side-by-side |
+| 09 — falling sand | cellular-automaton step over the bitmap; sand falls into a stone funnel, carve the floor to drain it |
 
 For current in-flight work and known limitations, see `docs-dev/PROGRESS.md`.
 

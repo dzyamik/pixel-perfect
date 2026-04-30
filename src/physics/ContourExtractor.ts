@@ -3,7 +3,23 @@ import {
     DouglasPeucker,
     MarchingSquares,
 } from '../core/index.js';
-import type { Chunk, Contour, Island } from '../core/index.js';
+import type { Chunk, Contour, Island, MaterialRegistry } from '../core/index.js';
+
+/**
+ * Returns `true` if the given material id should generate static
+ * Box2D colliders. Air (id 0) doesn't. Materials with
+ * `simulation === 'sand'` (or any non-static fluid kind) don't —
+ * they're driven by the cellular-automaton step instead and would
+ * trigger per-frame physics rebuilds if they participated in the
+ * static collider mesh. Unknown ids and materials with no
+ * `simulation` field default to `static` for v1 back-compat.
+ */
+function isStaticCollider(id: number, materials: MaterialRegistry): boolean {
+    if (id === 0) return false;
+    const material = materials.get(id);
+    if (material === undefined) return true;
+    return material.simulation === undefined || material.simulation === 'static';
+}
 
 /**
  * Internal utility: extract one or more contours that bound a single
@@ -59,7 +75,9 @@ export function componentToContours(
         const lx = cell.x - minX;
         const ly = cell.y - minY;
         const m = sourceBitmap.getPixel(cell.x, cell.y);
-        if (m > 0) temp.setPixel(lx, ly, m);
+        if (isStaticCollider(m, sourceBitmap.materials)) {
+            temp.setPixel(lx, ly, m);
+        }
     }
 
     const contours: Contour[] = [];
@@ -123,10 +141,13 @@ export function chunkToContours(
     });
     const cx0 = chunk.cx * cs;
     const cy0 = chunk.cy * cs;
+    const materials = sourceBitmap.materials;
     for (let y = 0; y < cs; y++) {
         for (let x = 0; x < cs; x++) {
             const m = sourceBitmap.getPixel(cx0 + x, cy0 + y);
-            if (m > 0) temp.setPixel(x + PADDING, y + PADDING, m);
+            if (isStaticCollider(m, materials)) {
+                temp.setPixel(x + PADDING, y + PADDING, m);
+            }
         }
     }
 

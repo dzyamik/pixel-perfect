@@ -2,6 +2,74 @@
 
 All notable changes to this project will be documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) loosely; this project does not yet publish to npm.
 
+## [v2.0.0] — 2026-04-30
+
+The headline v2 feature lands: a cellular-automaton step that
+simulates fluid materials (sand for now; water / gas later) on the
+bitmap. Static and fluid materials coexist in the same world; the
+static-material colliders generate physics bodies, fluid materials
+move per tick under gravity. Demo 09 (falling sand) is the
+visualization.
+
+### Added
+
+- `Material.simulation?: 'static' | 'sand'` — optional field on
+  `Material`. Defaults to `'static'` for v1 back-compat. Existing
+  v1 materials work without changes.
+- `core/algorithms/CellularAutomaton.step(bitmap, tick?)` — pure
+  one-tick simulator. Bottom-up sweep so a grain falls one row per
+  tick; per-tick L/R alternation kills directional bias on diagonal
+  slides. Sand can't tunnel through walls (a diagonal slide
+  requires the side cell at the same row to also be air). Air is
+  the only "passable" cell in v2.0; sand doesn't yet displace
+  other fluid kinds.
+- `DestructibleTerrain.simStep()` — runs one tick on the terrain's
+  bitmap with an internal counter that flips L/R bias each call.
+- `DestructibleTerrainOptions.autoSimulate` — when `true`, the
+  terrain runs `simStep()` at the start of every `update()` call,
+  before the rebuild flush. Default `false` (v1 behavior unchanged).
+
+### Changed
+
+- **Collider extraction filters by simulation kind.** Both
+  `chunkToContours` and `componentToContours` now skip cells whose
+  material's `simulation` is non-static. This prevents per-frame
+  sand motion from triggering per-frame physics rebuilds —
+  necessary for the simulation to be cheap.
+
+### Demo 09 — falling sand
+
+`examples/09-falling-sand/`: stone funnel, left-click spawns sand
+at the cursor, right-click carves the stone, space dumps a one-shot
+patch of sand at the top, R resets. The cellular automaton runs
+auto-simulate via the plugin's POST_UPDATE hook; nothing else to
+wire on the user's end.
+
+### Tests
+
+12 new tests in `tests/core/algorithms/CellularAutomaton.test.ts`:
+single grain falls, sand at bottom row stays put, sand on rock
+doesn't move, stone never moves, diagonal slide over a single
+block, no tunneling through walls, alternation across ticks,
+collapse-into-pyramid invariants (sand count preserved + no sand
+floats), sand doesn't displace sand, bottom-up correctness across
+tick chain, world-boundary handling at x=0, unset simulation
+defaults to static. Total suite now 264 tests across 20 files;
+typecheck + lint clean.
+
+### Compatibility
+
+This is a major version bump to mark the addition of fluid
+simulation as a meaningful capability shift, not because of any
+breaking signature changes. All v1 code continues to work
+unchanged: `Material.simulation` is optional (defaults to
+`'static'`), `autoSimulate` is opt-in (defaults to `false`), and
+the collider-filter behavior for v1 materials is identical (no
+`simulation` field → treated as static → generates colliders just
+like v1).
+
+---
+
 ## [v1.1.0] — 2026-04-30
 
 Two `PixelPerfectSprite` v1 limitations lifted (scaling and rotation),

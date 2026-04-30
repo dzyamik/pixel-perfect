@@ -21,6 +21,20 @@ export interface Point {
 }
 
 /**
+ * How a material behaves under the cellular-automaton simulation step.
+ *
+ * - `'static'` — the material doesn't move on its own. The bitmap state is
+ *   only changed by `Carve` / `Deposit` operations or by debris detection.
+ *   This is the default for back-compat with v1.x material definitions.
+ * - `'sand'` — the material falls under gravity each simulation tick.
+ *   Sand cells try to move straight down; if blocked, they slide
+ *   diagonally to either side. Only `'static'` materials generate Box2D
+ *   colliders, so simulating sand doesn't trigger per-frame physics
+ *   rebuilds.
+ */
+export type SimulationKind = 'static' | 'sand';
+
+/**
  * Description of a material that can occupy a bitmap cell.
  *
  * Material id `0` is reserved for air and is never registered. Registered
@@ -45,6 +59,12 @@ export interface Material {
     destructible: boolean;
     /** 0..1, scales destruction radius for carve operations on this material. */
     destructionResistance: number;
+    /**
+     * Simulation kind for the cellular-automaton step. Defaults to
+     * `'static'` when omitted — i.e. existing v1 materials behave
+     * identically without changes.
+     */
+    simulation?: SimulationKind;
 }
 
 /**
