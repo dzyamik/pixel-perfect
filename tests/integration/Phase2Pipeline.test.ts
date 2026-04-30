@@ -138,10 +138,13 @@ describe('Phase 2 pipeline — destroy a chunk of terrain', () => {
     });
 });
 
-describe('Phase 2.5 pipeline — cross-chunk blob support', () => {
-    it('a single blob spanning multiple chunks produces one coherent body', () => {
-        // 128x128 / 32 = 16 chunks. Solid rectangle spans 4 chunks
-        // (cx 1..2, cy 2..3) — well past chunkSize.
+describe('Per-chunk colliders — cross-chunk blob support', () => {
+    it('a single blob spanning multiple chunks produces one body per occupied chunk', () => {
+        // 128x128 / 32 = 16 chunks. Solid rectangle covers 4 chunks
+        // (cx 1..2, cy 2..3). The per-chunk model gives each chunk its
+        // own static body whose triangulated polygons sit along the
+        // chunk boundary — adjacent polygons share an edge but the
+        // combined mass acts as one solid for any body resting on top.
         const big = new ChunkedBitmap({ width: 128, height: 128, chunkSize: 32 });
         const bigAdapter = new Box2DAdapter({ worldId, pixelsPerMeter: 32 });
         const bigQueue = new DeferredRebuildQueue({ bitmap: big });
@@ -154,27 +157,27 @@ describe('Phase 2.5 pipeline — cross-chunk blob support', () => {
             for (const c of big.chunks) bigQueue.enqueueChunk(c);
             bigQueue.flush(bigAdapter);
 
-            // Exactly one terrain body for the one connected blob.
             const liveBodies = big.chunks
                 .map((c) => bigAdapter.getChunkBody(c))
                 .filter((b) => b !== null);
-            expect(liveBodies.length).toBe(1);
-            // The single body has a closed-loop chain wrapping the whole
-            // blob (one shape per edge after DP simplification).
-            expect(b2Body_GetShapeCount(liveBodies[0]!)).toBeGreaterThan(0);
+            // Rectangle spans 4 chunks (2x2), so 4 bodies.
+            expect(liveBodies.length).toBe(4);
+            for (const body of liveBodies) {
+                expect(b2Body_GetShapeCount(body!)).toBeGreaterThan(0);
+            }
         } finally {
             bigAdapter.dispose();
         }
     });
 
-    it('two disjoint cross-chunk blobs produce two bodies', () => {
+    it('two disjoint cross-chunk blobs produce one body per occupied chunk in each', () => {
         const big = new ChunkedBitmap({ width: 128, height: 128, chunkSize: 32 });
         const bigAdapter = new Box2DAdapter({ worldId, pixelsPerMeter: 32 });
         const bigQueue = new DeferredRebuildQueue({ bitmap: big });
         try {
-            // Blob A spans (0..1, 0..1) chunks.
+            // Blob A spans (0..1, 0..1) chunks (2x2 = 4 chunks).
             for (let x = 16; x < 48; x++) for (let y = 16; y < 48; y++) big.setPixel(x, y, 1);
-            // Blob B spans (2..3, 2..3) chunks.
+            // Blob B spans (2..3, 2..3) chunks (2x2 = 4 chunks).
             for (let x = 80; x < 112; x++) for (let y = 80; y < 112; y++) big.setPixel(x, y, 1);
 
             for (const c of big.chunks) bigQueue.enqueueChunk(c);
@@ -183,45 +186,59 @@ describe('Phase 2.5 pipeline — cross-chunk blob support', () => {
             const liveBodies = big.chunks
                 .map((c) => bigAdapter.getChunkBody(c))
                 .filter((b) => b !== null);
-            expect(liveBodies.length).toBe(2);
+            // 4 chunks per blob × 2 blobs = 8 bodies.
+            expect(liveBodies.length).toBe(8);
         } finally {
             bigAdapter.dispose();
         }
     });
 
-    it('carving across a chunk boundary destroys the old body and creates new bodies', () => {
+    it('carving in one chunk does not rebuild bodies in other chunks', () => {
+        // This is the property the per-chunk model exists to give us:
+        // a settled body resting on chunk B retains its contacts when
+        // the user carves chunk A. We assert it via body identity —
+        // the bodies in chunks NOT touched by the carve must be the
+        // SAME body handle pre- and post-carve.
         const big = new ChunkedBitmap({ width: 128, height: 128, chunkSize: 32 });
         const bigAdapter = new Box2DAdapter({ worldId, pixelsPerMeter: 32 });
         const bigQueue = new DeferredRebuildQueue({ bitmap: big });
         try {
-            // Single horizontal bar spanning 4 chunks.
+            // Single horizontal bar spanning 4 chunks (cx 0..3, cy 2).
             for (let x = 16; x < 112; x++) for (let y = 64; y < 96; y++) big.setPixel(x, y, 1);
             for (const c of big.chunks) bigQueue.enqueueChunk(c);
             bigQueue.flush(bigAdapter);
 
-            const before = big.chunks
-                .map((c) => bigAdapter.getChunkBody(c))
-                .filter((b): b is BodyId => b !== null);
-            expect(before.length).toBe(1);
-            const beforeBody = before[0]!;
+            const beforeMap = new Map<string, BodyId>();
+            for (const c of big.chunks) {
+                const b = bigAdapter.getChunkBody(c);
+                if (b !== null) beforeMap.set(`${c.cx},${c.cy}`, b);
+            }
+            // Bar covers 4 chunks across cy=2 row.
+            expect(beforeMap.size).toBe(4);
 
-            // Carve a hole that bisects the bar.
-            Carve.circle(big, 64, 80, 10);
-            for (const c of big.chunks) bigQueue.enqueueChunk(c);
+            // Carve only in the leftmost bar chunk (cx=0). Brush radius
+            // 6 keeps the carve away from the cx=1 chunk boundary.
+            Carve.circle(big, 24, 80, 6);
+            for (const c of big.chunks) {
+                if (c.dirty) bigQueue.enqueueChunk(c);
+            }
             bigQueue.flush(bigAdapter);
 
-            // Old body destroyed.
-            expect(b2Body_IsValid(beforeBody)).toBe(false);
+            // Carved chunk's body should be replaced.
+            const carvedChunk = big.getChunk(0, 2);
+            expect(bigAdapter.getChunkBody(carvedChunk)).not.toBe(beforeMap.get('0,2'));
+            expect(b2Body_IsValid(beforeMap.get('0,2')!)).toBe(false);
 
-            // After the bisecting carve, depending on radius vs height
-            // we either have one bar with a hole (donut-like, 1 body) or
-            // two halves (2 bodies). Just verify SOMETHING coherent
-            // exists.
-            const after = big.chunks
-                .map((c) => bigAdapter.getChunkBody(c))
-                .filter((b): b is BodyId => b !== null);
-            expect(after.length).toBeGreaterThanOrEqual(1);
-            for (const b of after) expect(b2Body_IsValid(b)).toBe(true);
+            // The other bar chunks (cx=1, 2, 3 at cy=2) must retain
+            // identical body handles — same Box2D body, contacts on it
+            // preserved.
+            for (let cx = 1; cx <= 3; cx++) {
+                const key = `${cx},2`;
+                const bodyBefore = beforeMap.get(key);
+                const bodyAfter = bigAdapter.getChunkBody(big.getChunk(cx, 2));
+                expect(bodyAfter).toBe(bodyBefore);
+                expect(b2Body_IsValid(bodyAfter!)).toBe(true);
+            }
         } finally {
             bigAdapter.dispose();
         }

@@ -1,7 +1,6 @@
-import { FloodFill } from '../core/index.js';
 import type { Chunk, ChunkedBitmap, Contour, Material } from '../core/index.js';
 import type { Box2DAdapter } from './Box2DAdapter.js';
-import { componentToContours } from './ContourExtractor.js';
+import { chunkToContours } from './ContourExtractor.js';
 import type { BodyId } from './types.js';
 
 /**
@@ -46,35 +45,35 @@ interface PendingDebris {
  *
  * Two work categories:
  *
- *  - **Terrain rebuild** — `enqueueChunk(chunk)`. The set of dirtied
- *    chunks is just a "do we need to re-mesh terrain at all" signal;
- *    `flush()` does a *global* per-blob rebuild (see below). The
- *    chunks' collider dirty flags are cleared once the rebuild completes
- *    (the visual flag is left for the renderer).
+ *  - **Terrain rebuild** — `enqueueChunk(chunk)`. Each dirty chunk has
+ *    its solid pixels independently extracted and triangulated; only the
+ *    chunk's own static body is rebuilt. Chunks not in the dirty set are
+ *    untouched, so contacts between dynamic bodies and other chunks'
+ *    static bodies survive across the carve. The chunks' collider dirty
+ *    flags are cleared once the rebuild completes (the visual flag is
+ *    left for the renderer).
  *  - **Debris bodies** — `enqueueDebris(contour, material)`. On flush,
  *    every queued debris is converted into a dynamic body via
  *    {@link Box2DAdapter.createDebrisBody}. Debris is event-driven and
  *    is processed unconditionally — debris that misses its creation
  *    frame would visibly pop in.
  *
- * Per-blob global rebuild
- * -----------------------
- * Naive per-chunk marching squares produces *open* polylines wherever
- * a contour spans multiple chunks; Box2D's open chain shape needs at
- * least 4 vertices, but cross-chunk fragments simplify to 2–3 after
- * Douglas-Peucker, leaving collider seams. To avoid this, `flush()`
- * uses {@link FloodFill.findAllComponents} to identify every connected
- * solid component, extracts each component's closed contour(s) via the
- * shared {@link componentToContours} helper, and routes each component
- * to a *representative chunk* (the chunk containing the component's
- * lex-smallest cell). The {@link Box2DAdapter}'s `Map<Chunk, BodyId>`
- * then holds at most one entry per representative chunk; chunks that
- * are interior to a blob have no body at all.
+ * Per-chunk colliders
+ * --------------------
+ * Each chunk owns its own static body, made of triangulated polygons
+ * extracted from just that chunk's pixels. Chunk-boundary edges are
+ * handled correctly by two-sided polygon collision: adjacent chunks each
+ * carry a polygon whose edge sits on the boundary, and the combined
+ * mass acts as one solid for any body sitting on top. The cross-chunk
+ * stitching from Phase 2.5 is no longer required and the global
+ * flood-fill rebuild was retired with this model.
  *
- * Trade-off: the global pass is O(W·H) per dirty flush rather than
- * per-chunk. Fine for destruction events that happen a few times per
- * second; if it shows up as a hot path later, the optimization is to
- * confine flood fill + extraction to the dirty chunks' bounding box.
+ * Why per-chunk over per-blob: a per-blob model rebuilt the entire
+ * blob's body on every carve, destroying every contact bound to it and
+ * waking every dynamic body resting on the blob — including bodies
+ * nowhere near the carve. With per-chunk colliders the blast radius of
+ * a carve is the dirty chunks only, so a settled body on a distant
+ * chunk doesn't see its underlying static body change at all.
  */
 export class DeferredRebuildQueue {
     private readonly bitmap: ChunkedBitmap;
@@ -141,105 +140,83 @@ export class DeferredRebuildQueue {
         adapter: Box2DAdapter,
         onChunkRebuilt?: (chunk: Chunk) => void,
     ): void {
-        // Snapshot every dynamic body whose AABB overlaps the terrain
-        // before any static-body churn. The terrain rebuild will destroy
-        // each chunk's static body, which destroys every contact bound
-        // to that body's shapes and wakes the contacting dynamic bodies.
-        // Restoring (transform, velocity, awake) after the rebuild
-        // returns sleeping bodies to sleep and preserves the kinematic
-        // state of awake ones — eliminating the per-frame "wake + free
-        // fall + bounce" cycle that would otherwise show up as visible
-        // jitter and could drift bodies into carved-out holes.
-        const snapshots = adapter.snapshotDynamicBodies({
-            minX: 0,
-            minY: 0,
-            maxX: this.bitmap.width,
-            maxY: this.bitmap.height,
-        });
-
-        // Identify every connected solid component in the bitmap, extract
-        // its closed contours, and route each component to a deterministic
-        // representative chunk (the chunk containing its lex-smallest
-        // cell — i.e., the BFS start cell). Multiple components whose
-        // first cells fall in the same chunk merge into one body's chain
-        // shapes; for static terrain this is harmless.
-        const components = FloodFill.findAllComponents(this.bitmap);
-        const cs = this.bitmap.chunkSize;
-        const newAssignments = new Map<Chunk, Contour[]>();
-
-        for (const component of components) {
-            const head = component.cells[0];
-            if (head === undefined) continue; // empty component, never happens
-            const cx = Math.floor(head.x / cs);
-            const cy = Math.floor(head.y / cs);
-            const repChunk = this.bitmap.getChunk(cx, cy);
-            const contours = componentToContours(
-                component,
-                this.bitmap,
-                this.simplificationEpsilon,
-            );
-            const accum = newAssignments.get(repChunk) ?? [];
-            accum.push(...contours);
-            newAssignments.set(repChunk, accum);
-        }
-
-        // Destroy every previously-tracked chunk that no longer has an
-        // assignment. Snapshot the iterable first because destroyChunk
-        // mutates the adapter's internal map. Also clear cached
-        // contours so they don't outlive the body.
-        const previouslyTracked = [...adapter.trackedChunks()];
-        for (const chunk of previouslyTracked) {
-            if (!newAssignments.has(chunk)) {
-                adapter.destroyChunk(chunk);
-                chunk.contours = null;
-            }
-        }
-
-        // Wipe contour caches on every other chunk too — chunks that
-        // were never tracked (interior chunks of a previous blob, or
-        // freshly-air chunks) must not retain stale contour data.
-        for (const chunk of this.bitmap.chunks) {
-            if (!newAssignments.has(chunk)) chunk.contours = null;
-        }
-
-        // Rebuild the rep chunks. Sort for deterministic invocation order
-        // (eases replay debugging and gives onChunkRebuilt a stable
-        // sequence). Also populate chunk.contours so debug renderers
-        // and consumers that want to inspect the collider shape can.
-        //
-        // For each rep, skip the rebuild entirely if the contour set is
-        // bit-identical to last frame's. This is the common case during
-        // continuous-drag carving on multi-blob terrain — most blobs
-        // don't change frame to frame, and rebuilding them anyway
-        // destroys+rebuilds chains, briefly removing contact support
-        // for any dynamic body resting on them.
-        const repsSorted = [...newAssignments.keys()].sort((a, b) => {
+        // Iterate dirty chunks in (cy, cx) order so the onChunkRebuilt
+        // callback fires deterministically (eases replay debugging) and
+        // so unit tests can assert on the order.
+        const dirtySorted = [...this.dirtyChunks].sort((a, b) => {
             if (a.cy !== b.cy) return a.cy - b.cy;
             return a.cx - b.cx;
         });
-        for (const chunk of repsSorted) {
-            const contours = newAssignments.get(chunk)!;
-            if (contoursEqual(chunk.contours, contours)) continue;
-            adapter.rebuildChunk(chunk, contours);
-            chunk.contours = contours;
+
+        // Snapshot dynamic bodies in the AABB *of the dirty chunks only*.
+        // Bodies on chunks not being rebuilt have their static bodies
+        // (and the contacts on them) preserved across this flush, so
+        // they don't need snapshot/restore — and skipping them avoids
+        // the round-trip overhead and keeps Box2D's internal awake-set
+        // bookkeeping clean for those bodies.
+        const cs = this.bitmap.chunkSize;
+        let aabbMinX = Number.POSITIVE_INFINITY;
+        let aabbMinY = Number.POSITIVE_INFINITY;
+        let aabbMaxX = Number.NEGATIVE_INFINITY;
+        let aabbMaxY = Number.NEGATIVE_INFINITY;
+        for (const chunk of dirtySorted) {
+            const x0 = chunk.cx * cs;
+            const y0 = chunk.cy * cs;
+            if (x0 < aabbMinX) aabbMinX = x0;
+            if (y0 < aabbMinY) aabbMinY = y0;
+            if (x0 + cs > aabbMaxX) aabbMaxX = x0 + cs;
+            if (y0 + cs > aabbMaxY) aabbMaxY = y0 + cs;
+        }
+        const snapshots = dirtySorted.length === 0
+            ? []
+            : adapter.snapshotDynamicBodies({
+                minX: aabbMinX,
+                minY: aabbMinY,
+                maxX: aabbMaxX,
+                maxY: aabbMaxY,
+            });
+
+        // For each dirty chunk, extract its own contours independently
+        // and rebuild its body if and only if the new contour set
+        // differs from the cached one. Chunks not in the dirty set are
+        // not touched at all.
+        for (const chunk of dirtySorted) {
+            const contours = chunkToContours(
+                chunk,
+                this.bitmap,
+                this.simplificationEpsilon,
+            );
+
+            if (contoursEqual(chunk.contours, contours)) {
+                // Defensive: the chunk's body might have been destroyed
+                // by an earlier path (e.g. dispose); but if contours are
+                // unchanged we don't touch it here.
+                continue;
+            }
+
+            if (contours.length === 0) {
+                // Chunk became all-air. Drop its body and clear cache.
+                adapter.destroyChunk(chunk);
+                chunk.contours = null;
+            } else {
+                adapter.rebuildChunk(chunk, contours);
+                chunk.contours = contours;
+            }
             onChunkRebuilt?.(chunk);
         }
 
-        // Clear all dirty flags — every chunk's collider state is now in
-        // sync with the bitmap, regardless of which chunks were
-        // explicitly enqueued.
-        for (const chunk of this.bitmap.chunks) {
+        // Clear dirty flags on the chunks we touched. Other chunks are
+        // left alone (their `dirty` flag is false anyway since they were
+        // never enqueued).
+        for (const chunk of dirtySorted) {
             this.bitmap.clearDirty(chunk);
         }
         this.dirtyChunks.clear();
 
-        // Now that all destroyed-and-recreated terrain bodies are back
-        // in place, write the dynamic-body kinematic state we captured
-        // pre-rebuild back onto each body. This undoes the wake-up and
-        // any shape-destroy side effects, leaving every body exactly
-        // where it was before the rebuild. The next world step will
-        // re-resolve any tiny remaining penetration against the new
-        // polygon set without a free-fall window.
+        // Restore dynamic-body state we snapshotted before the rebuild.
+        // Rebuilds destroy contacts and wake their bodies; restoring
+        // (transform, velocity, awake) puts sleeping bodies back to
+        // sleep and preserves the motion of awake ones.
         adapter.restoreDynamicBodies(snapshots);
     }
 }
@@ -250,9 +227,9 @@ export class DeferredRebuildQueue {
  * {@link DeferredRebuildQueue#rebuildTerrain}.
  *
  * Both list ordering and per-vertex coordinates must match exactly.
- * `componentToContours` is deterministic (it builds a temp bitmap and
- * runs marching squares + DP with fixed parameters), so two extractions
- * of the same component produce bit-identical results.
+ * `chunkToContours` is deterministic (it builds a temp bitmap and
+ * runs marching squares + DP with fixed parameters), so two
+ * extractions of the same chunk produce bit-identical results.
  */
 function contoursEqual(
     a: readonly Contour[] | null,

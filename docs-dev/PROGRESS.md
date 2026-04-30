@@ -13,12 +13,20 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | 0 — bootstrap | ✅ done | — |
 | 1 — core engine | ✅ done | `v0.1.0` |
 | 2 — physics adapter | ✅ done | `v0.2.0` |
-| 2.5 — cross-chunk stitching | ✅ done | `v0.2.5` |
+| ~~2.5 — cross-chunk stitching~~ | retired (subsumed by per-chunk + polygon model) | `v0.2.5` |
 | 3 — Phaser integration | 🟡 in flight | — |
 | 4 — examples | (interleaved with Phase 3) | — |
 | 5 — docs & polish | not started | — |
 
 Test suite: 211 tests across 17 files, ~1.4 s. typecheck and lint clean.
+
+Collider model: **per-chunk** (one static body per chunk that has solid
+pixels). Each chunk's solid mass is independently triangulated via
+earcut. Carving in chunk A only rebuilds chunk A's body; bodies on
+other chunks keep their contacts. The Phase 2.5 cross-chunk stitching
+work has been retired — two-sided polygons make sharing a chunk
+boundary edge between adjacent polygons safe (no seam tunneling), so
+the per-blob global rebuild is no longer required.
 
 ---
 
@@ -41,6 +49,93 @@ Test suite: 211 tests across 17 files, ~1.4 s. typecheck and lint clean.
 | 04 — falling debris | DebrisDetector + dynamic bodies, floating brick falls on load | ✅ tunneling + L-shape fix landed 2026-04-30 (pending visual confirm) |
 
 Build / deploy: `npm run build` writes the demo bundle into `docs/` (committed). No CI; rebuild and commit when changing demos. `vite.config.ts` uses `base: './'` so the build works at any URL prefix.
+
+---
+
+## RESOLVED (2026-04-30): vibration on demo 03 — per-chunk colliders
+
+After snapshot/restore landed (below), demo 04's debris was stable but
+demo 03's balls still jittered when the user clicked-and-held the
+brush — even on chunks far from the cursor. The structural cause was
+that the entire hill in demo 03 was one connected blob, which under
+the per-blob global rebuild model was represented as **one static
+body**. Any carve anywhere on the hill rebuilt that body, which
+destroyed every contact bound to it, which woke every ball touching
+the hill. Snapshot/restore preserved their kinematic state across the
+rebuild but couldn't prevent the next world step's narrow-phase from
+recreating contacts and re-waking the bodies. Awake balls on a curved
+slope ricochet against subtly different contact normals each frame,
+producing the visible vibration.
+
+### Fix
+
+Switch from per-blob global rebuild to **per-chunk colliders**. Each
+chunk owns its own static body whose triangulated polygons are
+extracted from just that chunk's pixels. Adjacent chunks each carry a
+polygon along their shared boundary; with two-sided polygons (the
+prior fix) this is safe — combined the two polygons act as one solid
+mass for any body resting on top, and a body sliding across the seam
+just transitions from one polygon's contact to the other's.
+
+What changes:
+
+- New `chunkToContours(chunk, bitmap, epsilon)` in
+  `src/physics/ContourExtractor.ts` — single-chunk extraction with
+  1px air padding so every contour closes within the chunk.
+- `DeferredRebuildQueue.rebuildTerrain` rewritten: iterate dirty
+  chunks only, extract per-chunk contours, `contoursEqual` skip,
+  rebuild only changed chunks. Snapshot/restore is now scoped to the
+  union AABB of dirty chunks (not the whole bitmap), so bodies on
+  unaffected chunks are untouched and their Box2D awake-set state is
+  not perturbed.
+- The Phase 2.5 global flood-fill / `componentToContours` /
+  rep-chunk routing is gone from the queue's hot path.
+  `componentToContours` itself stays in `ContourExtractor.ts` because
+  `DebrisDetector` still uses it (debris is one component, sized
+  arbitrarily across chunks).
+
+### What this fixes
+
+- Carving in chunk A leaves chunks B…N's bodies (and their contacts)
+  exactly as they were. Settled balls on those chunks aren't woken.
+- A body actively rolling across the seam between chunk A (being
+  carved) and chunk B does see one frame of contact disturbance —
+  unavoidable and small.
+
+### Trade-offs
+
+- **More bodies.** Demo 03's hill went from 1 static body to ~10
+  (one per occupied chunk). Box2D handles thousands fine; not a perf
+  concern.
+- **Adjacent chunk polygons share a boundary edge.** This is fine for
+  bodies resting on top (they don't penetrate either polygon, no
+  artifacts) and fine for bodies penetrating the terrain (push-out is
+  toward the air-touching surface, not the internal seam). A body
+  sliding horizontally across a chunk seam may have a 1-frame contact
+  transition; in practice imperceptible.
+
+### Files involved
+
+- `src/physics/ContourExtractor.ts` — new `chunkToContours` helper
+  alongside the existing `componentToContours`.
+- `src/physics/DeferredRebuildQueue.ts` — `rebuildTerrain` rewritten
+  to per-chunk; class-level docs updated; `FloodFill.findAllComponents`
+  import removed.
+- `tests/integration/Phase2Pipeline.test.ts` — the "Phase 2.5 pipeline
+  — cross-chunk blob support" describe block was rewritten as
+  "Per-chunk colliders — cross-chunk blob support" with assertions
+  reflecting one-body-per-occupied-chunk. New test:
+  "carving in one chunk does not rebuild bodies in other chunks"
+  asserts body-handle stability for unaffected chunks.
+
+### Visual verification
+
+User confirmation pending. To verify: `npm run dev` →
+`http://localhost:5173/03-physics/`. Spawn a few balls (space bar),
+let them settle, then click-and-hold the carve brush on the opposite
+side of the hill. Expected: settled balls do not vibrate. The carve
+location's terrain still rebuilds normally; only that chunk's body
+is destroyed/recreated.
 
 ---
 
