@@ -1,5 +1,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { contourToChain, contourToPolygon } from '../../src/physics/ContourToBody.js';
+import {
+    contourToChain,
+    contourToPolygon,
+    contourToTriangles,
+} from '../../src/physics/ContourToBody.js';
 import {
     b2BodyType,
     b2Body_GetShapeCount,
@@ -187,5 +191,91 @@ describe('contourToPolygon', () => {
         });
         expect(result).not.toBeNull();
         expect(b2Body_GetShapeCount(bodyId)).toBe(1);
+    });
+});
+
+describe('contourToTriangles', () => {
+    it('produces 2 triangles for a square (4 vertices)', () => {
+        const square: Point[] = [
+            { x: 0, y: 0 },
+            { x: 10, y: 0 },
+            { x: 10, y: 10 },
+            { x: 0, y: 10 },
+        ];
+        const count = contourToTriangles(
+            bodyId,
+            { points: square, closed: true },
+            { pixelsPerMeter: PPM, density: 1 },
+        );
+        expect(count).toBe(2);
+        expect(b2Body_GetShapeCount(bodyId)).toBe(2);
+    });
+
+    it('produces 1 triangle for a triangle (3 vertices)', () => {
+        const triangle: Point[] = [
+            { x: 0, y: 0 },
+            { x: 10, y: 0 },
+            { x: 5, y: 10 },
+        ];
+        const count = contourToTriangles(
+            bodyId,
+            { points: triangle, closed: true },
+            { pixelsPerMeter: PPM, density: 1 },
+        );
+        expect(count).toBe(1);
+        expect(b2Body_GetShapeCount(bodyId)).toBe(1);
+    });
+
+    it('handles a non-convex L-shape (no convexity check)', () => {
+        const lShape: Point[] = [
+            { x: 0, y: 0 },
+            { x: 20, y: 0 },
+            { x: 20, y: 10 },
+            { x: 10, y: 10 },
+            { x: 10, y: 20 },
+            { x: 0, y: 20 },
+        ];
+        const count = contourToTriangles(
+            bodyId,
+            { points: lShape, closed: true },
+            { pixelsPerMeter: PPM, density: 1 },
+        );
+        // L-shape (6 verts, n-2 = 4 triangles).
+        expect(count).toBe(4);
+        expect(b2Body_GetShapeCount(bodyId)).toBe(4);
+    });
+
+    it('returns 0 for fewer than 3 vertices', () => {
+        const tooFew: Contour = {
+            points: [
+                { x: 0, y: 0 },
+                { x: 10, y: 10 },
+            ],
+            closed: true,
+        };
+        const count = contourToTriangles(bodyId, tooFew, {
+            pixelsPerMeter: PPM,
+            density: 1,
+        });
+        expect(count).toBe(0);
+        expect(b2Body_GetShapeCount(bodyId)).toBe(0);
+    });
+
+    it('handles many-vertex contours (no upper bound unlike polygon path)', () => {
+        // 32-vertex circle approximation — would be rejected by
+        // contourToPolygon (>8 verts) but earcut handles it fine.
+        const circle: Point[] = [];
+        for (let i = 0; i < 32; i++) {
+            const a = (i / 32) * Math.PI * 2;
+            circle.push({ x: 50 + 20 * Math.cos(a), y: 50 + 20 * Math.sin(a) });
+        }
+        const count = contourToTriangles(
+            bodyId,
+            { points: circle, closed: true },
+            { pixelsPerMeter: PPM, density: 1 },
+        );
+        // n-2 triangles for a simple polygon.
+        expect(count).toBe(30);
+        expect(b2Body_GetShapeCount(bodyId)).toBe(30);
     });
 });

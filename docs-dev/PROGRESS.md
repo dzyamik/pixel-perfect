@@ -2,7 +2,7 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-04-29, mid-Phase-3
+> Last updated: 2026-04-30, mid-Phase-3
 
 ---
 
@@ -18,7 +18,7 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | 4 — examples | (interleaved with Phase 3) | — |
 | 5 — docs & polish | not started | — |
 
-Test suite: 201 tests across 17 files, ~1.3 s. typecheck and lint clean.
+Test suite: 206 tests across 17 files, ~1.3 s. typecheck and lint clean.
 
 ---
 
@@ -37,93 +37,139 @@ Test suite: 201 tests across 17 files, ~1.3 s. typecheck and lint clean.
 |---|---|---|
 | 01 — basic rendering | TerrainRenderer paints a procedural bitmap | ✅ user-verified |
 | 02 — click to carve | input + carve + chunk repaint | ✅ user-verified |
-| 03 — physics colliders | Box2D world, drop balls, debug overlay | ✅ visually right *until the open issue* (see below) |
-| 04 — falling debris | DebrisDetector + dynamic bodies, floating brick falls on load | ✅ debris pipeline works *until the open issue* (see below) |
+| 03 — physics colliders | Box2D world, drop balls, debug overlay | ✅ tunneling fix landed 2026-04-30 (pending visual confirm) |
+| 04 — falling debris | DebrisDetector + dynamic bodies, floating brick falls on load | ✅ tunneling + L-shape fix landed 2026-04-30 (pending visual confirm) |
 
 Build / deploy: `npm run build` writes the demo bundle into `docs/` (committed). No CI; rebuild and commit when changing demos. `vite.config.ts` uses `base: './'` so the build works at any URL prefix.
 
 ---
 
-## OPEN: dynamic bodies tunnel through terrain on continuous carving
+## RESOLVED (2026-04-30): dynamic bodies tunnel through terrain on continuous carving
 
-**Status:** unresolved as of 2026-04-29. Two partial mitigations landed (see below); user still reports it on demos 03 and 04.
+**Status:** fixed by switching every collider — terrain *and* debris — from
+`b2ChainShape` to triangulated `b2PolygonShape`s via earcut. Kept here as a
+design record so the rationale isn't lost.
 
-### Symptom
+### Original symptom
 
-Drop a ball (demo 03) or let the floating brick settle (demo 04). Then start clicking or dragging the carve brush — anywhere, even on the opposite side of the world from the settled body. The settled body falls through the ground.
+Drop a ball (demo 03) or let the floating brick settle (demo 04). Click or
+drag the carve brush *anywhere* (even on the opposite side of the world).
+The settled body falls through the ground. In demo 04 there was a second
+related symptom: when carving severed a neck, the leftover L-shaped piece
+(shelf + neck stub) refused to fall as a solid — only small rectangular
+fragments fell.
 
-### Root cause
+### Root cause (one cause, two symptoms)
 
-`b2ChainShape` is **one-sided** by design — collisions only register on the side the segment normal points to. The library's terrain colliders are chain shapes, normals oriented to the air side, which is correct for terrain.
+`b2ChainShape` is **one-sided** by design — collisions only register on the
+side the segment normal points to. That choice is correct for static
+terrain (you only collide from outside) but it falls apart in two ways:
 
-When the bitmap mutates, `Box2DAdapter.rebuildChunk` destroys the old static body and creates a new one with new chain shapes. The mechanism that breaks:
+1. **Tunneling under continuous carving (terrain side):** every frame the
+   bitmap mutates, `Box2DAdapter.rebuildChunk` destroys the old static
+   body and creates a new one with new chain shapes. Destroying the body
+   destroys every contact bound to those shapes — the dynamic body
+   resting on the terrain loses support, gravity acts for the step's
+   `dt`, then the new chain shapes are tested against the dynamic body's
+   *current* position. If sub-pixel drift put it on the wrong side of a
+   chain seam (one-sided!), the chain doesn't see it as a contact and
+   the body keeps falling through the solid. Continuous drag means this
+   happens every frame, accumulating drift.
 
-1. Body destroyed → all contacts on it are destroyed. The dynamic body resting on it loses support.
-2. Gravity acts on the dynamic body for the next step's `dt`.
-3. New body created with new chains.
-4. Next `world.Step` runs narrow-phase against the new chains. If the dynamic body's current position is on the *wrong* side of a chain (even by sub-pixel), the chain doesn't see it as a contact (one-sided), and the body keeps falling through the solid.
+2. **Non-convex debris doesn't act solid (debris side):** the legacy
+   `createDebrisBody` tried `b2PolygonShape` first (convex + ≤8 verts)
+   and fell back to a *closed* `b2ChainShape` for everything else. A
+   shelf-plus-neck-stub left over after a carve is L-shaped (non-convex,
+   6+ verts), so it took the chain fallback. Closed chains on a dynamic
+   body barely register collisions because they're still one-sided —
+   the body has no "inside," only an outline that might-or-might-not
+   collide depending on which side things approach from. Result: the
+   shelf piece stayed put while small rectangular fragments fell as
+   expected.
 
-The continuous-drag form is worst: every frame's carve dirties the bitmap, every frame the body is destroyed/recreated, every frame a settled ball loses and reacquires support.
+### What was tried before A (landed earlier, kept)
 
-### What was tried (landed)
+1. **Skip rebuild when contours are bit-identical to last frame** —
+   `DeferredRebuildQueue.rebuildTerrain` calls `contoursEqual(...)` and
+   bails out if true. Still useful: cuts churn for blobs unaffected by
+   a given carve. Stays in.
+2. **Reorder demo update loop: rebuild before step** — both demos now
+   call `terrain.update()` *before* `b2.WorldStep`. Stays in; cheap.
 
-1. **Skip rebuild when contours are bit-identical to last frame** — `DeferredRebuildQueue.rebuildTerrain` calls `contoursEqual(chunk.contours, contours)` and bails out if true. `componentToContours` is deterministic, so any blob whose bitmap state didn't change produces a bit-identical contour list and is skipped entirely. This catches every blob unaffected by a given carve (e.g. shelves 2 and 3 in demo 04 while shelf 1 is being carved).
-2. **Reorder demo update loop: rebuild before step** — both demo 03 and demo 04 now call `terrain.update()` *before* `b2.WorldStep`. The step always sees fresh static bodies. Architecture rule #3 ("no body create/destroy inside a physics step") is still satisfied since the rebuild runs at the start of the frame's update, not during the step.
+These cut the tunneling window from two steps to one. They didn't
+eliminate it, because the *cause* (one-sided chain) stayed.
 
-### What was tried (reverted)
+### What was tried (reverted, in commit history)
 
-3. **Persistent body, swap chains only** — keep the chunk's `b2Body` alive across rebuilds, destroy individual chains via `b2DestroyChain`, and reattach new ones. **Reverted** because `phaser-box2d` 1.1's `b2DestroyChain` does *not* unlink the chain from the body's `headChainId` linked list. A subsequent `b2DestroyBody` (e.g. on dispose, or when the chunk's contours go to empty) walks the dangling list and double-frees from the chain pool, causing `RangeError: Invalid array length` deep inside `b2FreeId`. Reproducible by every existing rebuild test if we re-enable the path.
+3. **Persistent body, swap chains only** — reverted because
+   `phaser-box2d` 1.1's `b2DestroyChain` doesn't unlink the chain from
+   the body's `headChainId` linked list, so a subsequent `b2DestroyBody`
+   double-frees the chain pool (`RangeError: Invalid array length` in
+   `b2FreeId`). The bug was traced in source on 2026-04-30 and is
+   confirmed at PhaserBox2D.js:3260–3288 — the function frees the
+   chain id but never updates `body.headChainId` or `chain.nextChainId`.
 
-The fix is noted in a comment in `Box2DAdapter.rebuildChunk` so future maintainers don't re-attempt the same approach without addressing the underlying phaser-box2d bug.
+### What was tried (option B spike, ruled out by source-read on 2026-04-30)
 
-### Why the landed mitigations don't fully fix it
+4. **Per-shape destruction via `b2DestroyShape`** — `b2DestroyShape`
+   *does* unlink correctly (PhaserBox2D.js:3144–3152), so the
+   double-free is avoidable. But the spike's premise — that a persistent
+   body would preserve contacts across rebuilds — is false: contacts
+   are bound to *shapes*, not bodies (`b2DestroyShapeInternal`
+   PhaserBox2D.js:3155–3164 walks the body's contact list and destroys
+   every contact involving the destroyed shape). So even with the body
+   kept alive, every contact dies and the dynamic body still free-falls
+   into one-sided chains. B avoids the crash without fixing the bug;
+   not landed.
 
-- **Single-blob worlds (demo 03's hill)**: the equality skip never fires because every carve mutates *the* blob's bitmap state, so its contour list always changes. The body still gets destroyed every frame, contacts still die, balls still tunnel.
-- **Multi-blob worlds (demo 04 with floating brick + shelves + ground)**: the equality skip *helps*, but the blob the user is currently carving — and any blob a settled body is resting on — both get rebuilt. So a debris piece resting on the ground while the user keeps carving the ground itself still loses support every frame.
+### What landed (approach A, this commit)
 
-The reorder fix shrinks the window from "two steps of free-fall" to "one step of free-fall" but doesn't eliminate it. Continuous drag still produces enough cumulative drift over many frames to push a body across the chain shape's seam onto the wrong side.
+5. **Triangulate every contour into `b2PolygonShape`s.** Earcut produces
+   N-2 triangles per simple polygon. Each triangle becomes a single
+   `b2PolygonShape` via `b2ComputeHull` + `b2MakePolygon` +
+   `b2CreatePolygonShape`. Polygon shapes are **two-sided**: a body
+   that ends up "inside" a triangle is pushed out by penetration
+   resolution regardless of which side it approached from. This fixes
+   both symptoms in one stroke:
 
-### What to try next
+   - Terrain: a settled body that drifts during the rebuild gap is
+     pushed back out into the air on the next step. No more wrong-side
+     tunneling.
+   - Debris: an L-shaped shelf+stub becomes 4 solid triangles, which
+     collide normally as a single dynamic rigid body.
 
-Listed roughly in order of likely-yield vs likely-effort:
+   Files touched: `src/physics/ContourToBody.ts` (new
+   `contourToTriangles`), `src/physics/Box2DAdapter.ts` (both
+   `rebuildChunk` and `createDebrisBody` now go through it). Tests
+   updated to assert the new shape counts; the legacy `contourToChain`
+   and `contourToPolygon` functions stay exported (no internal callers,
+   but they're tested independently and could be useful for users
+   building their own colliders).
 
-#### A. Polygon decomposition (triangulation) instead of chain shapes
+### Trade-off
 
-Replace per-blob chain colliders with a triangulated polygon collider per blob. `phaser-box2d` exposes `CreatePolygonFromEarcut` (uses the Earcut.js library). Each blob's contour becomes N-2 triangles; each triangle is a `b2PolygonShape` (two-sided collision). A body that ends up "inside" a polygon gets pushed out by penetration resolution regardless of which side it entered from.
-
-Cost: more shapes per blob (~40 triangles for a typical destructible-terrain outline), but Box2D handles triangle counts in the thousands fine. The API change is local to `Box2DAdapter.rebuildChunk` and `ContourToBody`; users won't see it.
-
-This is what most published destructible-terrain Box2D demos do. Probably the right answer.
-
-#### B. Per-shape destruction via `b2DestroyShape`
-
-`b2DestroyChain` is the buggy entry point in phaser-box2d 1.1, but `b2DestroyShape` (operating on individual chain segments) might unlink correctly. We'd need to enumerate the body's shapes (`b2Body_GetShapes`) and destroy each one individually, then reattach new chains. Worth a 10-minute spike to verify the chain-segment shapes can be destroyed cleanly without the `b2DestroyChain` bug.
-
-If this works, it gives us the persistent-body benefit without rewriting collider semantics, and is the lightest-touch fix.
-
-#### C. Position-snapshot bodies before rebuild, restore after
-
-Walk all dynamic bodies whose AABB overlaps the rebuilding chunk's AABB, snapshot their `(position, velocity)`, do the rebuild, then call `b2Body_SetTransform` and `b2Body_SetLinearVelocity` to restore. Avoids the "free-fall during rebuild" window. Doesn't fix one-sided chain shapes intrinsically but eliminates the trigger.
-
-Heavier than A or B; we'd own the body-tracking complexity.
-
-#### D. Continuous collision detection on dynamic bodies
-
-`b2BodyDef` has `isBullet: true` for high-speed CCD. Settled bodies aren't fast though, so this probably doesn't help — but worth checking once we've narrowed which step is the source of the tunneling.
-
-### Repro recipe
-
-1. `npm run dev`, open `http://localhost:5173/04-falling-debris/`.
-2. Wait for the floating brick at the top to settle on the ground.
-3. Start dragging the brush *anywhere*. The brick falls through the ground within ~1 second of dragging.
-4. Same with demo 03: drop balls, let them settle, drag.
+More shapes per blob — a 40-vertex outline becomes ~38 triangles
+instead of 40 chain edges, so the count is comparable. Box2D handles
+triangle counts in the thousands without complaint. Repaint costs
+unchanged (the visual side never used chain data).
 
 ### Files involved
 
-- `src/physics/Box2DAdapter.ts` — `rebuildChunk` is where the destroy/create happens. The comment block there notes the failed persistent-body attempt.
-- `src/physics/DeferredRebuildQueue.ts` — `rebuildTerrain` does the global flood-fill rebuild and the `contoursEqual` skip.
-- `src/physics/ContourToBody.ts` — `contourToChain` is what produces the chain shapes today; would gain a polygon path under approach A.
-- `examples/03-physics/main.ts`, `examples/04-falling-debris/main.ts` — update loop ordering.
+- `src/physics/ContourToBody.ts` — new `contourToTriangles` helper.
+- `src/physics/Box2DAdapter.ts` — `rebuildChunk` and `createDebrisBody`
+  both route through `contourToTriangles`.
+- `tests/physics/ContourToBody.test.ts` — new `contourToTriangles`
+  describe block.
+- `tests/physics/Box2DAdapter.test.ts` — assertions updated to expect
+  triangle counts (not chain-edge counts).
+
+### Visual verification
+
+User confirmation pending. To verify: `npm run dev` →
+`http://localhost:5173/03-physics/` and `/04-falling-debris/`, then run
+the original repro (settle a body, then continuous-drag the brush
+anywhere). Expected: the body stays put. In demo 04, carving through
+a neck should drop the shelf as a single rotating L-piece.
 
 ---
 
@@ -139,5 +185,5 @@ Heavier than A or B; we'd own the body-tracking complexity.
 ## How to use this document
 
 - Read top to bottom at the start of a Phase 3 session to catch up.
-- When opening a new session to continue the tunneling fix: jump to "What to try next" and pick A first unless approach B's spike has been done.
-- When landing a fix or finishing an iteration, **update this file in the same commit** as the source change. Treat it like a CHANGELOG with one section per open issue rather than per release.
+- When landing a fix or finishing an iteration, **update this file in the same commit** as the source change. Treat it like a CHANGELOG with one section per open or recently-resolved issue.
+- Once an issue has been visually confirmed by the user *and* shipped in a tagged release, it's safe to prune from this file (the design rationale for the triangulation choice should move into `01-architecture.md` if it stays interesting beyond a few weeks).

@@ -59,8 +59,8 @@ describe('Box2DAdapter.rebuildChunk', () => {
         const bodyId = adapter.getChunkBody(chunk);
         expect(bodyId).not.toBeNull();
         expect(b2Body_IsValid(bodyId!)).toBe(true);
-        // 4-vertex loop chain attaches 4 edge shapes.
-        expect(b2Body_GetShapeCount(bodyId!)).toBe(4);
+        // A 4-vertex square triangulates to 2 triangles → 2 polygon shapes.
+        expect(b2Body_GetShapeCount(bodyId!)).toBe(2);
     });
 
     it('handles multiple contours on the same chunk (donut)', () => {
@@ -70,8 +70,13 @@ describe('Box2DAdapter.rebuildChunk', () => {
         adapter.rebuildChunk(chunk, [outer, inner]);
         const bodyId = adapter.getChunkBody(chunk);
         expect(bodyId).not.toBeNull();
-        // 4 + 4 chain shapes.
-        expect(b2Body_GetShapeCount(bodyId!)).toBe(8);
+        // Each square = 2 triangles, so 2 + 2 = 4 polygon shapes. Note
+        // we triangulate each contour independently here — outer-with-
+        // hole earcut (which would require passing outer + hole indices
+        // to earcut as a single polygon) is a follow-up if we ever
+        // need true donut colliders. Today every contour is a separate
+        // solid blob from the per-component rebuild path.
+        expect(b2Body_GetShapeCount(bodyId!)).toBe(4);
     });
 
     it('destroys the old body before creating a new one on rebuild', () => {
@@ -102,8 +107,8 @@ describe('Box2DAdapter.rebuildChunk', () => {
             square(2, 2, 10),
         ]);
         const bodyId = adapter.getChunkBody(chunk)!;
-        // Only the valid square contour produced shapes.
-        expect(b2Body_GetShapeCount(bodyId)).toBe(4);
+        // Only the valid square contour produced shapes (2 triangles).
+        expect(b2Body_GetShapeCount(bodyId)).toBe(2);
     });
 
     it('handles independent chunks without interfering', () => {
@@ -139,17 +144,21 @@ describe('Box2DAdapter.destroyChunk', () => {
 });
 
 describe('Box2DAdapter.createDebrisBody', () => {
-    it('creates a dynamic body for a small convex contour', () => {
+    it('creates a dynamic body for a small convex contour (triangulated)', () => {
         const debrisContour = square(10, 10, 4);
         const bodyId = adapter.createDebrisBody(debrisContour, dirt);
         expect(bodyId).not.toBeNull();
         expect(b2Body_IsValid(bodyId!)).toBe(true);
-        // Convex+≤8 verts → polygon shape (1 shape).
-        expect(b2Body_GetShapeCount(bodyId!)).toBe(1);
+        // A 4-vertex square earcut-triangulates to 2 triangles, so the
+        // dynamic body holds 2 polygon shapes.
+        expect(b2Body_GetShapeCount(bodyId!)).toBe(2);
     });
 
-    it('creates a chain body for a non-convex contour (fallback)', () => {
-        // L-shape is non-convex; polygon rejection kicks in, chain takes over.
+    it('creates a multi-triangle dynamic body for a non-convex contour', () => {
+        // L-shape (6 vertices, non-convex). Previously this fell back to
+        // a closed chain shape on a dynamic body, which barely registers
+        // collisions — that was the root cause of "horizontal shelves
+        // don't fall" in demo 04. Triangulation handles it directly.
         const lShape: Contour = {
             points: [
                 { x: 0, y: 0 },
@@ -163,8 +172,8 @@ describe('Box2DAdapter.createDebrisBody', () => {
         };
         const bodyId = adapter.createDebrisBody(lShape, dirt);
         expect(bodyId).not.toBeNull();
-        // Chain shape: one shape per edge.
-        expect(b2Body_GetShapeCount(bodyId!)).toBe(6);
+        // An L-shape (6 verts) triangulates to 4 triangles.
+        expect(b2Body_GetShapeCount(bodyId!)).toBe(4);
     });
 
     it('returns null for a contour with fewer than 3 vertices', () => {

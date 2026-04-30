@@ -1,3 +1,5 @@
+import earcut from 'earcut';
+
 import type { Contour } from '../core/index.js';
 import {
     b2ComputeHull,
@@ -146,4 +148,69 @@ export function contourToPolygon(
     if (options.userData !== undefined) shapeDef.userData = options.userData;
 
     return b2CreatePolygonShape(bodyId, shapeDef, polygon);
+}
+
+/**
+ * Attaches a triangulated polygon collider to `bodyId`. Each triangle
+ * becomes its own `b2PolygonShape` (3 verts, two-sided collision).
+ *
+ * This is the preferred path for both terrain and debris bodies because
+ * polygon shapes resolve penetration on either side, unlike one-sided
+ * `b2ChainShape`. Non-convex contours (e.g. an L-shaped piece left after
+ * a carve) are handled directly by the triangulator — no convex check
+ * or fallback is needed.
+ *
+ * Returns the number of triangle shapes successfully attached. `0` means
+ * the contour was too short or earcut produced no triangles (e.g. all
+ * vertices collinear). Callers that need a body-creation gate should
+ * check for `> 0`.
+ *
+ * Vertex direction does not affect correctness — earcut handles either
+ * winding — but we still flip y at the same place chain conversion does
+ * so that pixel-space (y-down) contours land in Box2D meter-space (y-up).
+ */
+export function contourToTriangles(
+    bodyId: BodyId,
+    contour: Contour,
+    options: PolygonOptions,
+): number {
+    if (contour.points.length < 3) return 0;
+
+    // earcut wants a flat [x0, y0, x1, y1, ...] in target (Box2D) coords.
+    const ppm = options.pixelsPerMeter;
+    const flat = new Array<number>(contour.points.length * 2);
+    for (let i = 0; i < contour.points.length; i++) {
+        const p = contour.points[i]!;
+        flat[i * 2] = p.x / ppm;
+        flat[i * 2 + 1] = -p.y / ppm;
+    }
+
+    const indices = earcut(flat);
+    if (indices.length === 0) return 0;
+
+    const shapeDef = b2DefaultShapeDef();
+    shapeDef.density = options.density ?? 1;
+    if (options.friction !== undefined) shapeDef.friction = options.friction;
+    if (options.restitution !== undefined) shapeDef.restitution = options.restitution;
+    if (options.userData !== undefined) shapeDef.userData = options.userData;
+
+    let attached = 0;
+    for (let i = 0; i < indices.length; i += 3) {
+        const i0 = indices[i]! * 2;
+        const i1 = indices[i + 1]! * 2;
+        const i2 = indices[i + 2]! * 2;
+        const tri = [
+            new b2Vec2(flat[i0]!, flat[i0 + 1]!),
+            new b2Vec2(flat[i1]!, flat[i1 + 1]!),
+            new b2Vec2(flat[i2]!, flat[i2 + 1]!),
+        ];
+        const hull = b2ComputeHull(tri, 3);
+        // Degenerate triangle (collinear): b2ComputeHull may return an
+        // unusable hull. Trust b2MakePolygon to no-op on those rather
+        // than introducing our own area threshold here.
+        const polygon = b2MakePolygon(hull, 0);
+        b2CreatePolygonShape(bodyId, shapeDef, polygon);
+        attached++;
+    }
+    return attached;
 }

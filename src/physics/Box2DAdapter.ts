@@ -5,7 +5,7 @@ import {
     b2DefaultBodyDef,
     b2DestroyBody,
 } from './box2d.js';
-import { contourToChain, contourToPolygon } from './ContourToBody.js';
+import { contourToTriangles } from './ContourToBody.js';
 import type { BodyId, WorldId } from './types.js';
 
 export interface Box2DAdapterOptions {
@@ -71,21 +71,29 @@ export class Box2DAdapter {
 
     /**
      * Replaces the chunk's terrain body with a fresh static body whose
-     * chain shapes match the supplied contours.
+     * polygon (triangle) shapes match the supplied contours.
      *
      * The previous body (if any) is destroyed first; pass an empty list
-     * to clear the chunk entirely. Contours that would produce
-     * insufficient-vertex chains (closed < 3, open < 4) are silently
-     * skipped. If no contour was valid, no body is created and the map
-     * entry is cleared.
+     * to clear the chunk entirely. Contours with fewer than 3 vertices
+     * are silently skipped. If no contour produced any triangles, no
+     * body is created and the map entry is cleared.
      *
-     * Note: persistent-body / chain-only-swap is not viable with
-     * `phaser-box2d` 1.1 — its `b2DestroyChain` doesn't unlink the
-     * chain from the body's chain list, so a subsequent `b2DestroyBody`
-     * double-frees the chain pool. We destroy and recreate the whole
-     * body. The {@link DeferredRebuildQueue} skips this rebuild when
-     * the contour set is unchanged across frames, which keeps churn
-     * down for terrain blobs unaffected by a given carve.
+     * Why polygons (triangulated via earcut) rather than one-sided
+     * `b2ChainShape`: a dynamic body that drifts to the wrong side of
+     * a chain seam during a destroy/recreate cycle isn't seen as
+     * colliding with the chain (chain normals are one-sided) and falls
+     * through. Two-sided polygons resolve penetration regardless of
+     * which side the body ended up on, which fixes the tunneling under
+     * continuous carving.
+     *
+     * Note on lifecycle: persistent-body / chain-only-swap was tried
+     * and is not viable with `phaser-box2d` 1.1 — its `b2DestroyChain`
+     * doesn't unlink the chain from the body's chain list, so a
+     * subsequent `b2DestroyBody` double-frees the chain pool. We
+     * destroy and recreate the whole body. The
+     * {@link DeferredRebuildQueue} skips this rebuild when the contour
+     * set is unchanged across frames, which keeps churn down for
+     * terrain blobs unaffected by a given carve.
      */
     rebuildChunk(chunk: Chunk, contours: readonly Contour[]): void {
         const existing = this.chunkBodies.get(chunk);
@@ -103,12 +111,11 @@ export class Box2DAdapter {
 
         let attached = 0;
         for (const contour of contours) {
-            const chainId = contourToChain(bodyId, contour, {
+            attached += contourToTriangles(bodyId, contour, {
                 pixelsPerMeter: this.pixelsPerMeter,
                 friction: this.defaultTerrainFriction,
                 restitution: this.defaultTerrainRestitution,
             });
-            if (chainId !== null) attached++;
         }
 
         if (attached === 0) {
@@ -147,14 +154,19 @@ export class Box2DAdapter {
     /**
      * Creates a dynamic body for a detached island contour.
      *
-     * Tries `b2PolygonShape` first (for convex contours with ≤ 8
-     * vertices); falls back to a closed `b2ChainShape` for everything
-     * else. Returns `null` if the contour is too small to form any
-     * shape (< 3 vertices for a closed contour).
+     * The contour is triangulated via earcut and each triangle becomes
+     * its own `b2PolygonShape` on a single dynamic body. This handles
+     * non-convex outlines (e.g. an L-shaped piece left over after a
+     * carve severs a neck) cleanly without falling back to chain shapes,
+     * which behave poorly on dynamic bodies (one-sided collision means
+     * the body doesn't act as a solid).
      *
-     * The body's COM is set to the centroid of the input contour and the
-     * shape vertices are translated to body-local space; this is what
-     * makes the debris rotate naturally about its own center under gravity.
+     * Returns `null` if the contour is too small (< 3 vertices) or
+     * earcut could not produce any triangles (e.g. all vertices
+     * collinear). The body's COM is set to the centroid of the input
+     * contour and shape vertices are translated to body-local space;
+     * this is what makes the debris rotate naturally about its own
+     * center under gravity.
      */
     createDebrisBody(contour: Contour, material: Material): BodyId | null {
         if (contour.points.length < 3) return null;
@@ -187,21 +199,14 @@ export class Box2DAdapter {
         bodyDef.position.y = -(cy + this.originPxY) / this.pixelsPerMeter;
         const bodyId = b2CreateBody(this.worldId, bodyDef);
 
-        const polygonId = contourToPolygon(bodyId, localContour, {
+        const triCount = contourToTriangles(bodyId, localContour, {
             pixelsPerMeter: this.pixelsPerMeter,
             density: material.density,
             friction: material.friction,
             restitution: material.restitution,
         });
-        if (polygonId !== null) return bodyId;
-
-        const chainId = contourToChain(bodyId, localContour, {
-            pixelsPerMeter: this.pixelsPerMeter,
-            friction: material.friction,
-            restitution: material.restitution,
-        });
-        if (chainId === null) {
-            // Contour was too degenerate for any shape — clean up.
+        if (triCount === 0) {
+            // Contour was too degenerate for any triangle — clean up.
             b2DestroyBody(bodyId);
             return null;
         }
