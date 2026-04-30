@@ -4,6 +4,7 @@ import {
     alphaSourceToMask,
     maskBitmapOverlap,
     maskMaskOverlap,
+    maskToContours,
 } from '../../../src/core/queries/AlphaOverlap.js';
 import type { AlphaMask } from '../../../src/core/queries/AlphaOverlap.js';
 
@@ -156,5 +157,62 @@ describe('maskBitmapOverlap', () => {
         expect(maskBitmapOverlap(mask, -100, -100, bitmap)).toBe(false);
         // Mask placed past the world's far corner.
         expect(maskBitmapOverlap(mask, 1000, 1000, bitmap)).toBe(false);
+    });
+});
+
+describe('maskToContours', () => {
+    it('returns no contours for a fully-transparent mask', () => {
+        const mask = gridMask(['000', '000', '000']);
+        expect(maskToContours(mask)).toEqual([]);
+    });
+
+    it('returns one closed contour for a single solid blob', () => {
+        // 4x4 solid square in the middle of an 8x8 mask.
+        const rows = ['00000000'];
+        for (let i = 0; i < 4; i++) rows.push('00111100');
+        rows.push('00000000');
+        rows.push('00000000');
+        rows.push('00000000');
+        const mask = gridMask(rows);
+        const contours = maskToContours(mask, 0);
+        expect(contours).toHaveLength(1);
+        expect(contours[0]!.closed).toBe(true);
+        // After Douglas-Peucker with epsilon 0 the marching-squares
+        // vertices are preserved; a 4x4 axis-aligned square emits at
+        // least 4 corner vertices.
+        expect(contours[0]!.points.length).toBeGreaterThanOrEqual(4);
+    });
+
+    it('returns multiple contours for two disjoint blobs', () => {
+        const mask = gridMask([
+            '11000011',
+            '11000011',
+            '00000000',
+            '00000000',
+            '11000011',
+            '11000011',
+        ]);
+        const contours = maskToContours(mask);
+        // Four 2x2 corner blobs → four closed contours.
+        expect(contours.length).toBe(4);
+        for (const c of contours) expect(c.closed).toBe(true);
+    });
+
+    it('coordinates are mask-local (no padding leakage)', () => {
+        // Solid cell at exactly (0, 0) of the mask. With 1 px air
+        // padding internally, the contour around that cell touches
+        // mask-local (0, 0) and (1, 1) corners.
+        const mask = gridMask(['100', '000', '000']);
+        const contours = maskToContours(mask, 0);
+        expect(contours).toHaveLength(1);
+        const points = contours[0]!.points;
+        const minX = Math.min(...points.map((p) => p.x));
+        const minY = Math.min(...points.map((p) => p.y));
+        const maxX = Math.max(...points.map((p) => p.x));
+        const maxY = Math.max(...points.map((p) => p.y));
+        expect(minX).toBeGreaterThanOrEqual(-0.5); // half-pixel margin from MS
+        expect(minY).toBeGreaterThanOrEqual(-0.5);
+        expect(maxX).toBeLessThanOrEqual(1.5);
+        expect(maxY).toBeLessThanOrEqual(1.5);
     });
 });

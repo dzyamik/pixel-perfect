@@ -563,15 +563,30 @@ Phase 3 deliverables from `02-roadmap.md` are all done. A
   `CODE_OF_CONDUCT.md` is Contributor Covenant v2.1.
   `.github/ISSUE_TEMPLATE/bug.yml` and `feature.yml` capture
   structured repros / proposals.
+- ✅ "View source" link on every demo's nav, pointing at the
+  demo's `main.ts` on GitHub. Each demo now serves as both a
+  runnable example and a copy-pasteable code reference.
+- ✅ Demo 08 — sprite playground. Drag-and-test sandbox for
+  `PixelPerfectSprite` with file-upload (or drag-and-drop) so
+  the user can swap the sprite's texture for any PNG and watch
+  the alpha-mask outline track. New `AlphaOverlap.maskToContours`
+  primitive backs the outline rendering.
 - ⬜ VitePress concept-and-recipes site under `docs-dev/site/` →
   `docs/site/`. Roadmap-budgeted but the README + SKILL.md +
   inline TSDoc + auto-generated API ref already cover most of
   what it would carry; deferring unless the perceived gap
   becomes real.
-- ⬜ Hero gif / video for README — needs recording, can't be
-  done from CLI. Optional polish for v1.0.0.
-- ⬜ Final TODO sweep + cross-doc consistency pass before tagging
-  `v1.0.0`.
+- ⬜ **Hero gif / video for README** — needs recording from a
+  running dev server, can't be done from CLI. Suggested clip:
+  ~30 s of demo 06 (Worms-style — walk left/right, lob a few
+  grenades, watch a cliff slab detach). Drop the resulting
+  `.gif` or `.webm` at `docs/media/hero.gif` (or similar) and
+  link from README's top section. Optional for `v1.0.0`; can
+  ship `v1.0.0` without it and add as a `v1.0.x` polish patch.
+- ✅ Final TODO sweep + cross-doc consistency pass — landed
+  2026-04-30 (`src/`, `tests/`, `examples/` are TODO-free; the
+  architecture, changelog, and skill docs were reconciled with
+  the per-chunk + polygon collider model).
 
 ---
 

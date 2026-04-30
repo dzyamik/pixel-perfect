@@ -16,8 +16,11 @@
  *    mask or sampling at fractional coords, both punted to v1.x.
  */
 
-import type { ChunkedBitmap } from '../ChunkedBitmap.js';
+import { ChunkedBitmap } from '../ChunkedBitmap.js';
+import * as DouglasPeucker from '../algorithms/DouglasPeucker.js';
+import * as MarchingSquares from '../algorithms/MarchingSquares.js';
 import type { AlphaSource } from '../ops/raster.js';
+import type { Contour } from '../types.js';
 
 /**
  * One byte per pixel, row-major: `0` = transparent (air), non-zero =
@@ -116,4 +119,56 @@ export function maskBitmapOverlap(
         }
     }
     return false;
+}
+
+/**
+ * Extracts the polyline outline(s) of an {@link AlphaMask}'s solid
+ * region(s) in mask-local coordinates.
+ *
+ * Useful for visualizing what a sprite's pixel-perfect collision
+ * footprint actually looks like — a UI overlay that traces the
+ * outline of solid pixels rather than the rectangular AABB. Demo 08
+ * uses this to draw the sprite's "real" border.
+ *
+ * Implementation: builds a single-chunk temp bitmap whose interior
+ * matches the mask (with 1 px of air padding so the contour closes
+ * locally), runs marching squares on it, and applies Douglas-Peucker
+ * with `epsilon`. Output coordinates are in mask-local space (`(0, 0)`
+ * is the mask's top-left corner). Translate by the mask's scene
+ * position to draw.
+ *
+ * @param epsilon Douglas-Peucker simplification distance in pixels.
+ *                Default 1 — same as the destructible-terrain path.
+ *                Pass 0 to keep every marching-squares vertex.
+ */
+export function maskToContours(mask: AlphaMask, epsilon = 1): Contour[] {
+    const PADDING = 1;
+    const size = Math.max(mask.width, mask.height) + 2 * PADDING;
+    const temp = new ChunkedBitmap({
+        width: size,
+        height: size,
+        chunkSize: size,
+    });
+    for (let y = 0; y < mask.height; y++) {
+        for (let x = 0; x < mask.width; x++) {
+            if (mask.data[y * mask.width + x] !== 0) {
+                temp.setPixel(x + PADDING, y + PADDING, 1);
+            }
+        }
+    }
+    const tempChunk = temp.chunks[0];
+    if (tempChunk === undefined) return [];
+
+    const contours: Contour[] = [];
+    for (const c of MarchingSquares.extract(tempChunk, temp)) {
+        const translated: Contour = {
+            points: c.points.map((p) => ({
+                x: p.x - PADDING,
+                y: p.y - PADDING,
+            })),
+            closed: c.closed,
+        };
+        contours.push(DouglasPeucker.simplify(translated, epsilon));
+    }
+    return contours;
 }
