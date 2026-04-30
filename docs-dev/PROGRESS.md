@@ -14,8 +14,8 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | 1 — core engine | ✅ done | `v0.1.0` |
 | 2 — physics adapter | ✅ done | `v0.2.0` |
 | ~~2.5 — cross-chunk stitching~~ | retired (subsumed by per-chunk + polygon model) | `v0.2.5` |
-| 3 — Phaser integration | 🟡 in flight | — |
-| 4 — examples | (interleaved with Phase 3) | — |
+| 3 — Phaser integration | ✅ done | `v0.3.0` |
+| 4 — examples | 🟡 in flight | — |
 | 5 — docs & polish | not started | — |
 
 Test suite: 228 tests across 18 files, ~1.4 s. typecheck and lint clean.
@@ -488,7 +488,28 @@ a neck should drop the shelf as a single rotating L-piece.
 
 ---
 
-## Remaining Phase 3 work
+## Phase 4 progress
+
+- ✅ **Demo 06 — Worms-style** (`examples/06-worms-style/`). The
+  trailer piece. Programmer-art circle character on a wide hilly
+  bitmap; arrows / WASD walk + jump; F throws a fused grenade
+  toward the cursor; explosion carves a crater and applies a
+  radial impulse to nearby dynamic bodies; cliff slabs detached
+  by the carve fall as debris bodies. End-to-end exercise of the
+  per-chunk collider model under continuous interaction. Camera
+  follows the player; G toggles a green-line collider debug
+  overlay; R resets.
+- ⬜ Demo 07 — image-based terrain (load a PNG mask, generate
+  matching terrain, demonstrate carving works on it). Roadmap
+  budget ~1.5 days.
+- ⬜ Performance pass on the existing demos / new ones.
+
+The four "phase 3 verification" demos (01–05) cover the basic
+pipeline and the sprite collision feature. Demo 06 is the
+"non-trivial gameplay scenario" demo. Demo 07 closes the
+"library can ingest content from an image" use case.
+
+## Original Phase 3 work (closed)
 
 - ✅ **`PixelPerfectPlugin`** landed 2026-04-30. Per-scene plugin
   extending `Phaser.Plugins.ScenePlugin`; exposes
