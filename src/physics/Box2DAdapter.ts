@@ -25,6 +25,18 @@ import { contourToTriangles } from './ContourToBody.js';
 import type { BodyId, WorldId } from './types.js';
 
 /**
+ * Squared linear+angular speed below which `restoreDynamicBodies`
+ * treats a body as "at rest for all practical purposes" and
+ * force-settles it (zero velocity + sleep). Box2D's default sleep
+ * threshold is `0.05` (squared length-units per second²); we use
+ * a tighter `0.01` so bodies in the natural-sleep band are left
+ * to Box2D's own sleepTime accumulator while bodies clearly at rest
+ * (e.g. settled debris jiggling at sub-pixel amplitude due to the
+ * rebuild-cycle wake-up) get force-settled immediately.
+ */
+const FORCE_SETTLE_SPEED2_THRESHOLD = 0.01;
+
+/**
  * A frozen copy of one dynamic body's kinematic state at a moment in
  * time. Returned by {@link Box2DAdapter.snapshotDynamicBodies} and
  * consumed by {@link Box2DAdapter.restoreDynamicBodies}.
@@ -346,14 +358,40 @@ export class Box2DAdapter {
      * `awake = false` after those calls puts settled bodies back to
      * sleep so the next world step skips gravity integration on them.
      *
-     * The awake restore is conditional: a body that was sleeping
-     * pre-rebuild is put back to sleep ONLY if it still has at least
-     * one static shape overlapping its AABB after the rebuild. If the
-     * user carved away the body's support, the AABB query returns no
-     * static — we leave the body awake so the next world step's gravity
-     * integration drops it normally. Without this gate, snapshot/restore
-     * would force-sleep a body whose support no longer exists, leaving
-     * it suspended in midair (the "ghost float" bug).
+     * The awake restore is conditional in two ways:
+     *
+     *  1. **Sleeping body without support → wake.** A body that was
+     *     sleeping pre-rebuild is put back to sleep only if it still
+     *     has at least one static shape overlapping its AABB after the
+     *     rebuild. If the user carved away the body's support, the
+     *     AABB query returns no static — we leave the body awake so
+     *     the next world step's gravity integration drops it normally.
+     *     Without this gate, snapshot/restore would force-sleep a body
+     *     whose support no longer exists, leaving it suspended in
+     *     midair (the "ghost float" bug).
+     *
+     *  2. **Awake low-velocity body with support → force-settle.**
+     *     During continuous-drag carving, every frame's
+     *     `b2DestroyShapeInternal` wakes the body via its hardcoded
+     *     `wakeBodies = true`. Box2D's natural sleep timer never
+     *     completes the `sleepTime` window because the wake-up
+     *     happens every frame. The body accumulates a small velocity
+     *     from each step's gravity + restitution rebound and bounces
+     *     forever at sub-pixel amplitude. This branch detects "the
+     *     body is at rest for all practical purposes" — pre-rebuild
+     *     speed² below {@link FORCE_SETTLE_SPEED2_THRESHOLD} AND the
+     *     AABB query confirms support — and force-zeroes the velocity
+     *     + sleeps the body, breaking the cycle.
+     *
+     * Trade-off: a body that's transiently moving slowly (e.g. mid-
+     * settling-bounce after just landing) and overlaps a static AABB
+     * can be force-settled too eagerly during heavy carving. The
+     * threshold is tight enough (~0.1 m/s) that genuinely-rolling or
+     * -falling bodies are preserved; bodies in the narrow band
+     * `[threshold, Box2D's sleep threshold]` would have settled
+     * within `sleepTime` anyway. In practice the bouncing-ball-while-
+     * carving case is rare; in the common case the user is happy that
+     * settled debris stops shimmering.
      */
     restoreDynamicBodies(snapshots: readonly BodySnapshot[]): void {
         for (const s of snapshots) {
@@ -375,15 +413,29 @@ export class Box2DAdapter {
                 new b2Vec2(s.px, s.py),
                 new b2Rot(s.rc, s.rs),
             );
-            b2Body_SetLinearVelocity(s.bodyId, new b2Vec2(s.vx, s.vy));
-            b2Body_SetAngularVelocity(s.bodyId, s.omega);
 
-            // Decide the awake state. Bodies that were already awake
-            // pre-rebuild stay awake. Bodies that were sleeping go back
-            // to sleep ONLY if support still exists; otherwise we leave
-            // them awake to avoid the ghost-float bug.
-            const desiredAwake = s.awake || !this.hasStaticUnderAABB(s.bodyId);
-            b2Body_SetAwake(s.bodyId, desiredAwake);
+            const speed2 = s.vx * s.vx + s.vy * s.vy + s.omega * s.omega;
+            const hasSupport = this.hasStaticUnderAABB(s.bodyId);
+            const lowVelocity = speed2 < FORCE_SETTLE_SPEED2_THRESHOLD;
+
+            if (hasSupport && (lowVelocity || !s.awake)) {
+                // Force-settle: zero velocity and sleep, regardless of
+                // pre-rebuild awake state. Covers both the "was sleeping
+                // and still has support" case and the "rebuild cycle is
+                // keeping a settled body artificially awake" case.
+                b2Body_SetLinearVelocity(s.bodyId, new b2Vec2(0, 0));
+                b2Body_SetAngularVelocity(s.bodyId, 0);
+                b2Body_SetAwake(s.bodyId, false);
+            } else {
+                // Preserve velocity. Awake state: keep awake unless the
+                // snapshot was sleeping AND we have no support (which
+                // can't happen given the branch above — `hasSupport`
+                // would be false here, so awake stays true regardless
+                // of `s.awake`).
+                b2Body_SetLinearVelocity(s.bodyId, new b2Vec2(s.vx, s.vy));
+                b2Body_SetAngularVelocity(s.bodyId, s.omega);
+                b2Body_SetAwake(s.bodyId, true);
+            }
         }
     }
 

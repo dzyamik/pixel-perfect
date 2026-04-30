@@ -55,61 +55,77 @@ the per-blob global rebuild is no longer required.
 |---|---|---|
 | 01 — basic rendering | TerrainRenderer paints a procedural bitmap | ✅ user-verified |
 | 02 — click to carve | input + carve + chunk repaint | ✅ user-verified |
-| 03 — physics colliders | Box2D world, drop balls, debug overlay | ✅ user-verified (one residual sub-pixel jitter — see "KNOWN LIMITATIONS" below) |
-| 04 — falling debris | DebrisDetector + dynamic bodies, floating brick falls on load | ✅ user-verified (one residual sub-pixel jitter — see "KNOWN LIMITATIONS" below) |
+| 03 — physics colliders | Box2D world, drop balls, debug overlay | ✅ user-verified |
+| 04 — falling debris | DebrisDetector + dynamic bodies, floating brick falls on load | ✅ user-verified |
 
 Build / deploy: `npm run build` writes the demo bundle into `docs/` (committed). No CI; rebuild and commit when changing demos. `vite.config.ts` uses `base: './'` so the build works at any URL prefix.
 
 ---
 
-## KNOWN LIMITATIONS
+## RESOLVED (2026-04-30): sub-pixel jitter on actively-carved chunks
 
-These don't block forward progress but should be revisited under the
-right context (see "When to revisit" on each).
+Closed by force-settle in `Box2DAdapter.restoreDynamicBodies`. Kept
+here as a design record so the rationale isn't lost.
 
-### Sub-pixel jitter on bodies in the chunk being actively carved
+### Original symptom
 
-A dynamic body resting on the **same chunk** the user is currently
-carving sees a small per-frame motion during continuous-drag carve.
-Mechanism: each frame's carve dirties the chunk → static body is
-destroyed and recreated → contacts on it die → next world step
-re-creates contacts. The contact recreation wakes the body for one
-step, gravity adds ~0.07 px (at gravity = 15 m/s², dt = 1/60), the
-new contact resolves it back. With restitution > 0 (e.g. 0.3 in
-demo 03's balls) the resolved velocity carries some bounce energy
-that doesn't fully dissipate before the next rebuild. Visible as
-sub-pixel shimmer.
+A dynamic body resting on the **same chunk** the user was currently
+carving saw a small per-frame motion during continuous-drag carve.
+Each frame's carve dirtied the chunk, the static body was destroyed
+and recreated, and `b2DestroyShapeInternal` woke every dynamic body
+contacting it via its hardcoded `wakeBodies = true`. Snapshot/restore
+preserved the body's pre-rebuild state — but the cycle of "wake →
+gravity for one step → narrow-phase contact recreation → resolve
+back" injected a small velocity each frame that didn't fully
+dissipate before the next rebuild. Visible as sub-pixel shimmer.
 
-Bodies on **other** chunks are unaffected (per-chunk colliders
-preserve their bodies, contacts, and awake state across the rebuild).
+Bodies on **other** chunks were always unaffected (per-chunk
+colliders preserve their bodies, contacts, and awake state across
+the rebuild).
 
-#### When to revisit
+### Fix
 
-- Phase 4 Worms-style demo. If the residual jitter is visible/
-  uncomfortable in real gameplay (rolling grenades, character
-  on platforms, etc.), it becomes a user-experience bug worth
-  the deeper fix.
-- After a perf pass (Phase 5). If we end up moving to per-shape
-  rebuild via `b2DestroyShape` (the B-spike approach, now feasible
-  with two-sided polygons), this falls out as a side benefit.
+`restoreDynamicBodies` now has a force-settle path. After the
+existing transform restore, it inspects the snapshot's
+`(linVel, angVel)` and the body's current AABB:
 
-#### Candidate fixes (do not action without a real reason)
+- If the body has at least one static shape overlapping its AABB
+  AND its pre-rebuild speed² is below
+  `FORCE_SETTLE_SPEED2_THRESHOLD` (currently `0.01`,
+  ~0.1 m/s) → zero the velocity and force-sleep, regardless of
+  pre-rebuild awake state. Box2D's natural sleep timer can't reach
+  `sleepTime` under continuous-rebuild waking; this short-circuit
+  is what the timer would have done if it could.
+- Otherwise → preserve velocity, keep awake (or wake if no support
+  to avoid the ghost-float edge case).
 
-1. **Sub-chunk colliders.** Smaller chunk size shrinks the carve
-   blast radius further. Trade-off: more bodies in the world, more
-   per-frame queue churn.
-2. **Per-shape destroy on rebuild.** Iterate the chunk body's
-   shapes via `b2Body_GetShapes`, destroy individual triangles via
-   `b2DestroyShape` (which unlinks correctly per
-   PhaserBox2D.js:3144–3152), and add only the new triangles. The
-   body persists; only the shapes that actually changed get
-   destroyed. Cleaner than chunk-body destroy/recreate but is its
-   own moderately-sized refactor and would need new diff logic in
-   `Box2DAdapter.rebuildChunk`.
-3. **Manual contact preservation.** Pre-rebuild, snapshot the body's
-   current contacts (manifold + impulses). Post-rebuild, re-create
-   them against the new shapes. Heaviest of the three; only worth
-   it if 1 and 2 don't suffice.
+The threshold is tighter than Box2D's natural sleep threshold
+(`0.05`) so bodies in the band `[0.01, 0.05]` are still left to
+Box2D's own timer when they're not in the rebuild cycle.
+
+### Trade-off
+
+A body that's *transiently* moving slowly (e.g. a ball mid-settle
+after just landing, decelerating from a collision) and overlaps a
+static AABB will be force-settled too eagerly during heavy carving.
+The threshold is tight enough that genuinely-rolling or -falling
+bodies are preserved; bodies in the narrow `[threshold, sleep
+threshold]` band would have settled within `sleepTime` anyway.
+In practice the bouncing-ball-while-actively-carving case is rare;
+the common case (settled debris stops shimmering during drag) is
+the win.
+
+### Files involved
+
+- `src/physics/Box2DAdapter.ts` — `FORCE_SETTLE_SPEED2_THRESHOLD`
+  constant; `restoreDynamicBodies` rewritten with the
+  `hasSupport && (lowVelocity || !s.awake) → force-settle` branch.
+- `tests/integration/Phase2Pipeline.test.ts` — two new cases:
+  "force-settles a low-velocity awake body with support" and
+  "preserves velocity for fast-moving bodies even with support
+  nearby". The existing "stays asleep with support", "wakes a body
+  whose support was carved out", and velocity-preservation tests
+  still pass — the behavior is a strict superset.
 
 ---
 

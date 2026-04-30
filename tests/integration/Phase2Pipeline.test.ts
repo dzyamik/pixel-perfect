@@ -341,6 +341,76 @@ describe('Phase 2 pipeline — snapshot/restore across rebuild', () => {
         expect(b2Body_IsAwake(bodyId)).toBe(false);
     });
 
+    it('force-settles a low-velocity awake body with support across a rebuild', () => {
+        // Continuous-drag carve scenario: every frame's
+        // b2DestroyShapeInternal wakes contacted bodies, so a settled
+        // body never accumulates Box2D's sleepTime window. Without
+        // the force-settle path the body would bounce at sub-pixel
+        // amplitude forever; with it, low-velocity bodies that have
+        // support get zeroed and slept regardless of pre-rebuild
+        // awake state.
+        for (let x = 0; x < 64; x++) for (let y = 56; y < 64; y++) bitmap.setPixel(x, y, 1);
+        flushAll();
+        const restingSquare: Contour = {
+            points: [
+                { x: 28, y: 48 },
+                { x: 36, y: 48 },
+                { x: 36, y: 56 },
+                { x: 28, y: 56 },
+            ],
+            closed: true,
+        };
+        const bodyId = adapter.createDebrisBody(restingSquare, dirt);
+        if (bodyId === null) throw new Error('failed to create debris body');
+
+        // Body is awake with a tiny "bounce" velocity (squared 0.005,
+        // well under the 0.01 force-settle threshold).
+        b2Body_SetLinearVelocity(bodyId, new b2Vec2(0.05, 0.05));
+        b2Body_SetAwake(bodyId, true);
+        expect(b2Body_IsAwake(bodyId)).toBe(true);
+
+        Carve.circle(bitmap, 4, 60, 2);
+        flushAll();
+
+        // Force-settle: zero vel, sleep.
+        expect(b2Body_IsAwake(bodyId)).toBe(false);
+        const v = b2Body_GetLinearVelocity(bodyId);
+        expect(v.x).toBe(0);
+        expect(v.y).toBe(0);
+    });
+
+    it('preserves velocity for fast-moving bodies even with support nearby', () => {
+        // Trade-off check: a body genuinely moving (rolling, falling)
+        // must NOT be force-settled even if its AABB happens to brush
+        // a static shape. Threshold-tight enough to avoid this.
+        for (let x = 0; x < 64; x++) for (let y = 56; y < 64; y++) bitmap.setPixel(x, y, 1);
+        flushAll();
+        const square: Contour = {
+            points: [
+                { x: 28, y: 48 },
+                { x: 36, y: 48 },
+                { x: 36, y: 56 },
+                { x: 28, y: 56 },
+            ],
+            closed: true,
+        };
+        const bodyId = adapter.createDebrisBody(square, dirt);
+        if (bodyId === null) throw new Error('failed to create debris body');
+
+        // Speed² = 1 + 1 = 2, way over the 0.01 threshold.
+        b2Body_SetLinearVelocity(bodyId, new b2Vec2(1, 1));
+        b2Body_SetAwake(bodyId, true);
+
+        Carve.circle(bitmap, 4, 60, 2);
+        flushAll();
+
+        // Velocity preserved, body still awake.
+        expect(b2Body_IsAwake(bodyId)).toBe(true);
+        const v = b2Body_GetLinearVelocity(bodyId);
+        expect(v.x).toBeCloseTo(1, 9);
+        expect(v.y).toBeCloseTo(1, 9);
+    });
+
     it('wakes a body whose support was carved out (no ghost-float)', () => {
         // Same setup, but this time the user carves DIRECTLY UNDER the
         // body. The support polygon under the body's AABB is gone, so
