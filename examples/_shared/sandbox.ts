@@ -6,6 +6,8 @@
 
 import * as Phaser from 'phaser';
 
+import { PixelPerfectPlugin } from '../../src/index.js';
+
 /** Default game config used by the demos. Override per-demo as needed. */
 export interface SandboxConfig {
     /** Logical render width. Defaults to 640. */
@@ -33,6 +35,15 @@ export function bootSandbox(config: SandboxConfig): Phaser.Game {
         backgroundColor: config.background ?? 0x1a1d23,
         pixelArt: true,
         scene: config.scene,
+        plugins: {
+            scene: [
+                {
+                    key: 'PixelPerfectPlugin',
+                    plugin: PixelPerfectPlugin,
+                    mapping: 'pixelPerfect',
+                },
+            ],
+        },
     });
 }
 

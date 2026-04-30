@@ -20,6 +20,16 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 
 Test suite: 212 tests across 17 files, ~1.5 s. typecheck and lint clean.
 
+The library now has its public Phaser entry point: register
+`PixelPerfectPlugin` once at game creation (mapping `'pixelPerfect'`)
+and inside any scene you get `scene.pixelPerfect.terrain({...})` as
+a factory. The factory supplies the scene automatically and tracks
+created terrains for auto-destroy on scene shutdown. Auto-flush of
+terrain dirty state runs on Phaser's `POST_UPDATE` event; demos that
+manage their own physics step (`b2.WorldStep` inside scene update)
+should still call `terrain.update()` manually before the step so
+colliders are fresh — see demo 04 for the pattern.
+
 Collider model: **per-chunk** (one static body per chunk that has solid
 pixels). Each chunk's solid mass is independently triangulated via
 earcut. Carving in chunk A only rebuilds chunk A's body; bodies on
@@ -480,13 +490,17 @@ a neck should drop the shelf as a single rotating L-piece.
 
 ## Remaining Phase 3 work
 
-- 🟡 **`PixelPerfectPlugin`** — Phaser global plugin so users can write
-  `scene.pixelPerfect.terrain({...})` instead of
-  `new DestructibleTerrain({ scene: this, ... })`. Architecture doc
-  treats this as *the* public entry point. **In flight next.**
+- ✅ **`PixelPerfectPlugin`** landed 2026-04-30. Per-scene plugin
+  extending `Phaser.Plugins.ScenePlugin`; exposes
+  `scene.pixelPerfect.terrain(options)` factory; auto-flushes via
+  `POST_UPDATE`; cleans up tracked terrains on `SHUTDOWN`/`DESTROY`.
+  Module augmentation in the plugin file types
+  `Phaser.Scene#pixelPerfect` so importing the plugin gets the
+  type for free. Demo 04 migrated as the verification path.
+  Other demos still use `new DestructibleTerrain` directly — fine
+  for now, can be migrated when each is otherwise touched.
 - ⬜ `PixelPerfectSprite` — alpha-aware sprite-vs-sprite and
-  sprite-vs-terrain collision. Independent feature; can be a fresh
-  session.
+  sprite-vs-terrain collision. Independent feature; **next up.**
 
 ## After Phase 3
 

@@ -32,9 +32,9 @@
 
 import * as Phaser from 'phaser';
 import * as b2 from 'phaser-box2d/dist/PhaserBox2D.js';
-import { DestructibleTerrain } from '../../src/index.js';
 import type {
     Contour,
+    DestructibleTerrain,
     Material,
     Point,
 } from '../../src/index.js';
@@ -93,8 +93,12 @@ class FallingDebrisScene extends Phaser.Scene {
         this.terrainOriginX = (this.scale.width - WIDTH) / 2;
         this.terrainOriginY = (this.scale.height - HEIGHT) / 2;
 
-        this.terrain = new DestructibleTerrain({
-            scene: this,
+        // Plugin factory: scene is supplied automatically and the
+        // resulting terrain is auto-flushed every frame at POST_UPDATE
+        // (see PixelPerfectPlugin). We still call terrain.update()
+        // manually below in update() because we want the rebuild to
+        // happen BEFORE WorldStep, not after.
+        this.terrain = this.pixelPerfect.terrain({
             width: WIDTH,
             height: HEIGHT,
             chunkSize: CHUNK_SIZE,
