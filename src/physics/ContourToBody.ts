@@ -16,7 +16,7 @@ import type { ChainId, BodyId } from './types.js';
 const B2_MAX_POLYGON_VERTICES = 8;
 
 /** Common physical parameters shared by chain and polygon creation. */
-interface BaseShapeOptions {
+export interface BaseShapeOptions {
     /** Conversion factor: 1 meter = `pixelsPerMeter` pixels. */
     pixelsPerMeter: number;
     /** Surface friction (Coulomb), 0..1+. Default 0.7. */
@@ -122,7 +122,7 @@ function isConvex(contour: Contour): boolean {
  * Returns the new shape id on success, or `null` if the contour is not
  * eligible. Eligibility:
  * - At least 3 vertices.
- * - At most {@link B2_MAX_POLYGON_VERTICES} (8) vertices.
+ * - At most 8 vertices (Box2D's `b2PolygonShape` cap).
  * - Convex (all consecutive cross products have the same sign).
  *
  * Callers (typically the debris path of {@link Box2DAdapter}) should

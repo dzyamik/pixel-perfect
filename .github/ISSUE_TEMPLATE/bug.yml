@@ -1,0 +1,71 @@
+name: Bug report
+description: Report a defect — something that doesn't work as documented or expected.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: |
+        What did you do, and what went wrong? Include error messages,
+        unexpected visuals, or wrong behavior.
+      placeholder: |
+        e.g. "Carving a circle near the chunk boundary leaves a sliver
+        of dirt that the renderer paints but the collider doesn't track"
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: |
+        A scene class or short script that triggers the bug, ideally
+        based on one of the example demos under `examples/`. The
+        smaller the better.
+      render: typescript
+    validations:
+      required: true
+
+  - type: input
+    id: phaser-version
+    attributes:
+      label: Phaser version
+      placeholder: "4.0.0"
+    validations:
+      required: true
+
+  - type: input
+    id: phaser-box2d-version
+    attributes:
+      label: phaser-box2d version
+      description: From `package.json` or `npm ls phaser-box2d`.
+      placeholder: "1.1.x"
+    validations:
+      required: false
+
+  - type: input
+    id: pixel-perfect-version
+    attributes:
+      label: pixel-perfect version / commit
+      description: |
+        The git tag (e.g. `v0.4.0`) or commit SHA you reproduced this
+        on. `git rev-parse --short HEAD` if you're on local main.
+      placeholder: "v0.4.0"
+    validations:
+      required: true
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser + OS
+      placeholder: "Chrome 132 / macOS 15"
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: |
+        Screenshots, video, console logs, related issues — whatever
+        helps. Optional.

@@ -1,0 +1,45 @@
+name: Feature request
+description: Propose a new capability or behavior.
+title: "[feat] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: |
+        What are you trying to do that the library currently makes hard
+        or impossible? Be concrete — a real game scenario beats an
+        abstract API wish.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed API / behavior
+      description: |
+        Sketch of what calling code would look like, or what the new
+        behavior should be. Don't worry about polish — the goal is to
+        agree on shape, not lock down the final API.
+      render: typescript
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: |
+        Workarounds you tried, third-party libraries that solve part
+        of this, or different API shapes you weighed. Helps us pick
+        the right path.
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Impact / scope
+      description: |
+        Does this fit v1, or is it post-1.0? Cross-cutting (touches
+        core + physics + Phaser) or layer-local? See
+        `docs-dev/02-roadmap.md` if you're not sure.
