@@ -2,7 +2,7 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-04-30, mid-Phase-3
+> Last updated: 2026-04-30, mid-Phase-3 (physics correctness done, plugin/sprite next)
 
 ---
 
@@ -45,10 +45,61 @@ the per-blob global rebuild is no longer required.
 |---|---|---|
 | 01 — basic rendering | TerrainRenderer paints a procedural bitmap | ✅ user-verified |
 | 02 — click to carve | input + carve + chunk repaint | ✅ user-verified |
-| 03 — physics colliders | Box2D world, drop balls, debug overlay | ✅ tunneling fix landed 2026-04-30 (pending visual confirm) |
-| 04 — falling debris | DebrisDetector + dynamic bodies, floating brick falls on load | ✅ tunneling + L-shape fix landed 2026-04-30 (pending visual confirm) |
+| 03 — physics colliders | Box2D world, drop balls, debug overlay | ✅ user-verified (one residual sub-pixel jitter — see "KNOWN LIMITATIONS" below) |
+| 04 — falling debris | DebrisDetector + dynamic bodies, floating brick falls on load | ✅ user-verified (one residual sub-pixel jitter — see "KNOWN LIMITATIONS" below) |
 
 Build / deploy: `npm run build` writes the demo bundle into `docs/` (committed). No CI; rebuild and commit when changing demos. `vite.config.ts` uses `base: './'` so the build works at any URL prefix.
+
+---
+
+## KNOWN LIMITATIONS
+
+These don't block forward progress but should be revisited under the
+right context (see "When to revisit" on each).
+
+### Sub-pixel jitter on bodies in the chunk being actively carved
+
+A dynamic body resting on the **same chunk** the user is currently
+carving sees a small per-frame motion during continuous-drag carve.
+Mechanism: each frame's carve dirties the chunk → static body is
+destroyed and recreated → contacts on it die → next world step
+re-creates contacts. The contact recreation wakes the body for one
+step, gravity adds ~0.07 px (at gravity = 15 m/s², dt = 1/60), the
+new contact resolves it back. With restitution > 0 (e.g. 0.3 in
+demo 03's balls) the resolved velocity carries some bounce energy
+that doesn't fully dissipate before the next rebuild. Visible as
+sub-pixel shimmer.
+
+Bodies on **other** chunks are unaffected (per-chunk colliders
+preserve their bodies, contacts, and awake state across the rebuild).
+
+#### When to revisit
+
+- Phase 4 Worms-style demo. If the residual jitter is visible/
+  uncomfortable in real gameplay (rolling grenades, character
+  on platforms, etc.), it becomes a user-experience bug worth
+  the deeper fix.
+- After a perf pass (Phase 5). If we end up moving to per-shape
+  rebuild via `b2DestroyShape` (the B-spike approach, now feasible
+  with two-sided polygons), this falls out as a side benefit.
+
+#### Candidate fixes (do not action without a real reason)
+
+1. **Sub-chunk colliders.** Smaller chunk size shrinks the carve
+   blast radius further. Trade-off: more bodies in the world, more
+   per-frame queue churn.
+2. **Per-shape destroy on rebuild.** Iterate the chunk body's
+   shapes via `b2Body_GetShapes`, destroy individual triangles via
+   `b2DestroyShape` (which unlinks correctly per
+   PhaserBox2D.js:3144–3152), and add only the new triangles. The
+   body persists; only the shapes that actually changed get
+   destroyed. Cleaner than chunk-body destroy/recreate but is its
+   own moderately-sized refactor and would need new diff logic in
+   `Box2DAdapter.rebuildChunk`.
+3. **Manual contact preservation.** Pre-rebuild, snapshot the body's
+   current contacts (manifold + impulses). Post-rebuild, re-create
+   them against the new shapes. Heaviest of the three; only worth
+   it if 1 and 2 don't suffice.
 
 ---
 
@@ -427,12 +478,24 @@ a neck should drop the shelf as a single rotating L-piece.
 
 ---
 
-## What's not yet started in Phase 3
+## Remaining Phase 3 work
 
-- `PixelPerfectPlugin` — Phaser global plugin (architecture has it as the public entry point: `scene.pixelPerfect.terrain(...)`). Library currently exposes `DestructibleTerrain` directly; ergonomics work post-tunneling-fix.
-- `PixelPerfectSprite` — alpha-aware sprite collision. Independent of the tunneling work; could be done in parallel by a fresh session.
-- Cross-chunk stress test demo — a Worms-style scene with proper gameplay (character controller + grenades). Roadmap puts it as Phase 4 demo #2.
-- Performance pass — chunk repaint uses per-pixel canvas writes; with the tunneling fix in flight we haven't profiled this yet.
+- 🟡 **`PixelPerfectPlugin`** — Phaser global plugin so users can write
+  `scene.pixelPerfect.terrain({...})` instead of
+  `new DestructibleTerrain({ scene: this, ... })`. Architecture doc
+  treats this as *the* public entry point. **In flight next.**
+- ⬜ `PixelPerfectSprite` — alpha-aware sprite-vs-sprite and
+  sprite-vs-terrain collision. Independent feature; can be a fresh
+  session.
+
+## After Phase 3
+
+- Phase 4 demos — Worms-style scene (the trailer piece), pixel-perfect
+  sprite collision demo, image-based terrain demo. The Worms-style demo
+  is also where the residual sub-pixel jitter (see KNOWN LIMITATIONS)
+  becomes worth re-evaluating.
+- Phase 5 — perf pass (chunk repaint uses per-pixel canvas writes;
+  unprofiled), README/site/docs polish.
 
 ---
 
