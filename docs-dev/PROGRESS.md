@@ -18,7 +18,7 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | 4 — examples | 🟡 in flight | — |
 | 5 — docs & polish | not started | — |
 
-Test suite: 228 tests across 18 files, ~1.4 s. typecheck and lint clean.
+Test suite: 236 tests across 19 files, ~1.4 s. typecheck and lint clean.
 
 The library now has its public Phaser entry point: register
 `PixelPerfectPlugin` once at game creation (mapping `'pixelPerfect'`)
@@ -508,7 +508,16 @@ a neck should drop the shelf as a single rotating L-piece.
   source via `getImageData`, hand it to the deposit op. Two-pass
   deposit at different alpha thresholds gives multi-material
   terrain (sand outline + dirt core) from a single image.
-- ⬜ Performance pass on the existing demos / new ones.
+- ✅ **Performance pass — TerrainRenderer hot loop.** Replaced the
+  per-pixel `materials.get(id)` + 4-byte writes with a 256-entry
+  packed-RGBA LUT keyed by material id, written through a
+  `Uint32Array` view of the `ImageData.data` buffer. New helpers
+  exposed: `paintChunkPixels(bitmapData, pixels32, colorLut)` and
+  `buildColorLut(materials)` — both pure, both unit-tested
+  without a Phaser scene. Bench result: **~10× speedup** on a
+  128×128 chunk repaint (0.080 ms → 0.007 ms per call). The LUT
+  is rebuilt every repaint (256 ops, negligible), so materials
+  registered after construction are reflected automatically.
 
 The four "phase 3 verification" demos (01–05) cover the basic
 pipeline and the sprite collision feature. Demo 06 is the
