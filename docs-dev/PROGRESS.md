@@ -18,7 +18,7 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | 4 — examples | (interleaved with Phase 3) | — |
 | 5 — docs & polish | not started | — |
 
-Test suite: 212 tests across 17 files, ~1.5 s. typecheck and lint clean.
+Test suite: 228 tests across 18 files, ~1.4 s. typecheck and lint clean.
 
 The library now has its public Phaser entry point: register
 `PixelPerfectPlugin` once at game creation (mapping `'pixelPerfect'`)
@@ -492,15 +492,28 @@ a neck should drop the shelf as a single rotating L-piece.
 
 - ✅ **`PixelPerfectPlugin`** landed 2026-04-30. Per-scene plugin
   extending `Phaser.Plugins.ScenePlugin`; exposes
-  `scene.pixelPerfect.terrain(options)` factory; auto-flushes via
-  `POST_UPDATE`; cleans up tracked terrains on `SHUTDOWN`/`DESTROY`.
-  Module augmentation in the plugin file types
-  `Phaser.Scene#pixelPerfect` so importing the plugin gets the
-  type for free. Demo 04 migrated as the verification path.
-  Other demos still use `new DestructibleTerrain` directly — fine
-  for now, can be migrated when each is otherwise touched.
-- ⬜ `PixelPerfectSprite` — alpha-aware sprite-vs-sprite and
-  sprite-vs-terrain collision. Independent feature; **next up.**
+  `scene.pixelPerfect.terrain(options)` and
+  `scene.pixelPerfect.sprite(x, y, key, frame?)` factories;
+  auto-flushes terrains via `POST_UPDATE`; cleans up tracked
+  terrains on `SHUTDOWN`/`DESTROY`. Module augmentation in the
+  plugin file types `Phaser.Scene#pixelPerfect` so importing the
+  plugin gets the type for free.
+- ✅ **`PixelPerfectSprite`** landed 2026-04-30. Extends
+  `Phaser.GameObjects.Sprite`. `overlapsPixelPerfect(other)` and
+  `overlapsTerrain(terrain)` go through pure
+  `core/queries/AlphaOverlap` helpers (`maskMaskOverlap`,
+  `maskBitmapOverlap`) — keeps the per-pixel math out of the
+  Phaser layer and unit-testable. Mask is extracted lazily on
+  first overlap, cached, invalidated on frame change; respects
+  `flipX` / `flipY`. v1 limits: no rotation, no scaling.
+- ✅ **Demo 05** (`examples/05-pixel-perfect-sprite/`): drag a
+  filled-circle sprite onto a ring sprite and a terrain patch.
+  Outline color encodes overlap state — gray (no AABB), yellow
+  (AABB only, false positive of cheap test), green (pixel-
+  perfect). Sprite-vs-terrain shown alongside sprite-vs-sprite.
+
+Phase 3 deliverables from `02-roadmap.md` are all done. A
+`v0.3.0` tag is appropriate after the user verifies demo 05.
 
 ## After Phase 3
 

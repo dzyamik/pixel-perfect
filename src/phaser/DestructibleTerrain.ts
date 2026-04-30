@@ -144,8 +144,13 @@ export class DestructibleTerrain {
      */
     readonly physics: TerrainPhysics | null;
 
-    private readonly originX: number;
-    private readonly originY: number;
+    /**
+     * Top-left of the terrain in **scene coordinates**. Public-readable
+     * so consumers can convert between scene space and bitmap space
+     * (e.g. {@link PixelPerfectSprite} does this on overlap checks).
+     */
+    readonly originX: number;
+    readonly originY: number;
     private readonly onDebrisCreated:
         | ((event: DebrisCreatedEvent) => void)
         | undefined;

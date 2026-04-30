@@ -2,6 +2,7 @@ import * as Phaser from 'phaser';
 
 import { DestructibleTerrain } from './DestructibleTerrain.js';
 import type { DestructibleTerrainOptions } from './DestructibleTerrain.js';
+import { PixelPerfectSprite } from './PixelPerfectSprite.js';
 
 /**
  * Per-scene Phaser plugin and the public entry point for the library
@@ -91,6 +92,29 @@ export class PixelPerfectPlugin extends Phaser.Plugins.ScenePlugin {
         });
         this.terrains.push(terrain);
         return terrain;
+    }
+
+    /**
+     * Creates an alpha-aware {@link PixelPerfectSprite} attached to
+     * this scene's display list. Same arguments as the Phaser
+     * `Sprite` constructor minus the scene (which is supplied
+     * automatically). Sprites are not tracked for auto-destroy by
+     * the plugin — Phaser's regular GameObject lifecycle handles
+     * that on scene shutdown.
+     */
+    sprite(
+        x: number,
+        y: number,
+        textureKey: string,
+        frame?: string | number,
+    ): PixelPerfectSprite {
+        if (this.scene === null) {
+            throw new Error(
+                'PixelPerfectPlugin.sprite() called before the plugin booted ' +
+                    'or after the scene was shut down.',
+            );
+        }
+        return new PixelPerfectSprite(this.scene, x, y, textureKey, frame);
     }
 
     /**
