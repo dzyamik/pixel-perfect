@@ -2,7 +2,9 @@
 
 > Pixel-perfect spatial reasoning for Phaser v4: chunked-bitmap destructible terrain, alpha-aware sprite collision, and procedural-mask utilities.
 
-**Status:** alpha — under active development. Expect API churn before v1.0.0.
+![pixel-perfect — destructible terrain demo](media/hero.gif)
+
+**Status:** `v1.1.0` — stable public surface. Local development only (not on npm yet).
 
 ## What this is
 

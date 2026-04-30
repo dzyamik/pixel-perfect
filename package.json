@@ -6,7 +6,7 @@
   "private": true,
   "scripts": {
     "dev": "vite",
-    "build": "tsc -p tsconfig.build.json && vite build && npm run docs:api",
+    "build": "tsc -p tsconfig.build.json && vite build && cp -r media docs/ && npm run docs:api",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",

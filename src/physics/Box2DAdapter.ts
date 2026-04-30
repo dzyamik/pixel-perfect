@@ -379,7 +379,8 @@ export class Box2DAdapter {
      *     from each step's gravity + restitution rebound and bounces
      *     forever at sub-pixel amplitude. This branch detects "the
      *     body is at rest for all practical purposes" — pre-rebuild
-     *     speed² below {@link FORCE_SETTLE_SPEED2_THRESHOLD} AND the
+     *     speed² below `0.01 m²/s²` (the
+     *     `FORCE_SETTLE_SPEED2_THRESHOLD` constant) AND the
      *     AABB query confirms support — and force-zeroes the velocity
      *     + sleeps the body, breaking the cycle.
      *
