@@ -467,15 +467,54 @@ Best-effort, not guaranteed in v1:
 
 This is enough for replay debugging, not enough for lockstep multiplayer.
 
-## What's deliberately not in v1
+## v2 — cellular-automaton fluid layer
 
-- Falling sand / cellular automaton layer (separate v2 effort)
+Shipped in `v2.0.0` (sand) and `v2.1.0` (water + density swap).
+
+`Material.simulation?: 'static' | 'sand' | 'water'` controls how a
+material moves. `'static'` (default for back-compat) generates Box2D
+colliders and never moves on its own. `'sand'` and `'water'` are
+fluid kinds processed by `CellularAutomaton.step(bitmap, tick)` —
+a pure one-tick simulator that mutates the bitmap in place.
+
+The simulator is bottom-up + per-tick L/R alternation:
+
+  - Sand: fall straight down (allow swap into water — density rule),
+    or slide diagonally into pure air. Doesn't move horizontally.
+  - Water: fall straight down → diagonal-down → spread horizontally.
+    Less dense than sand; doesn't move into sand cells. The
+    horizontal-spread rule is what gives water its level-finding
+    behavior.
+
+Critical interaction with the physics layer: `chunkToContours` and
+`componentToContours` filter the temp bitmap to **only** static
+materials. Fluid cells are visible to the renderer (they appear at
+the right color) and to spatial queries (`isSolid` returns true)
+but are invisible to physics colliders. Without this filter, every
+sand grain falling one row per frame would dirty its chunks and
+trigger a static-body rebuild — a continuous physics churn that
+would defeat the whole point.
+
+`DestructibleTerrain` exposes `simStep()` (one-tick) and
+`autoSimulate?: boolean` option (run a tick at the start of every
+`update()`). Demo 09 (`examples/09-falling-sand/`) is the
+visualization.
+
+## What's deliberately not in v2
+
 - WebWorker offload of marching squares
 - WebGPU compute paths
-- Matter.js physics adapter
+- Matter.js physics adapter (the last v2 item from the original
+  `CLAUDE.md` list — still open)
 - Edge texturing (grass tops, rims)
 - Save/load serialization
 - Multi-resolution mipmapped chunks
 - Networking / lockstep
+- Active-cell tracking for the cellular automaton (currently
+  O(W·H) per tick; sparse-set tracking would gate cost on actual
+  fluid pixel count)
+- More fluid kinds (gas, oil, fire) — sand + water suffice for the
+  v2 demo but the dispatch in `CellularAutomaton.step` is structured
+  to extend
 
 These are architecturally accommodated (the layered design doesn't preclude any of them) but explicitly out of scope.

@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) loosely; this project does not yet publish to npm.
 
+## [v2.1.1] — 2026-04-30
+
+Build / tooling polish.
+
+### Fixed
+
+- **Dev server now serves `/media/*` from the project root.** Vite's
+  `root: 'examples'` meant the dev server couldn't see the
+  project-root `media/` folder, so requests for `/media/hero.gif`
+  fell through to the SPA index.html (status 200 but `text/html`,
+  ~9 KB instead of 740 KB). The README and the demo landing page
+  reference `media/hero.gif`, so the page showed a broken image
+  during local development. Production was unaffected — the build's
+  `cp -r media docs/` step copies the file into the deployed
+  location. Added a small Vite plugin
+  (`pp-serve-project-root-media`) in `vite.config.ts` that
+  intercepts `/media/*` requests and streams from the project root,
+  with a directory-traversal guard.
+
+---
+
 ## [v2.1.0] — 2026-04-30
 
 Water joins sand as a simulated fluid kind. Sand and water coexist
