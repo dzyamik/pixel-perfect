@@ -2,17 +2,82 @@
 
 All notable changes to this project will be documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) loosely; this project does not yet publish to npm.
 
-## Unreleased — Phase 3 (mostly done)
+## Unreleased — Phase 5 (docs & polish, in flight)
 
-The Phaser layer is feature-complete for terrain. `PixelPerfectSprite`
-(alpha-aware sprite collision) is the last Phase 3 deliverable; tagged
-`v0.3.0` will be cut after that lands.
+- TypeDoc API reference auto-generated into `docs/api/` as part of
+  every `npm run build`. Linked from README, the demo landing
+  footer, and CONTRIBUTING.
+- `CONTRIBUTING.md` (dev workflow, Conventional Commits, testing
+  expectations), `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1),
+  and `.github/ISSUE_TEMPLATE/{bug,feature}.yml` for structured
+  issue intake.
+- Re-exported public-surface types from each layer's `index.ts`
+  (`BodySnapshot`, `BaseShapeOptions`, `TerrainPhysics`,
+  `DebrisCreatedEvent`, `chunkToContours`, `contourToTriangles`,
+  `paintChunkPixels`, `buildColorLut`, `AlphaMask`) so the
+  generated API ref covers everything users can reach.
+
+---
+
+## [v0.4.0] — 2026-04-30
+
+Phase 4 of `docs-dev/02-roadmap.md`: examples + perf pass.
+
+### Added — examples
+
+- **Demo 06 — Worms-style** (`examples/06-worms-style/`). The
+  trailer piece. Walking circle character on a wide hilly bitmap;
+  arrows / WASD walk + jump (grounded check via a tiny pixel probe
+  against the bitmap, no Box2D contact listener); F throws fused
+  grenades that carve craters and apply a radial linear impulse to
+  nearby dynamic bodies; cliff slabs detached by the carve fall as
+  dynamic debris bodies via the existing `extractDebris` path.
+  Camera follows the player; G toggles a green-line collider debug
+  overlay; R resets.
+- **Demo 07 — image-based terrain** (`examples/07-image-terrain/`).
+  Stamps an alpha mask onto the bitmap via
+  `terrain.deposit.fromAlphaTexture(...)`. The source canvas is
+  drawn procedurally at preload to keep the demo self-contained,
+  but the bridge from "PNG asset" to "destructible terrain" is
+  identical to a real `this.load.image('island', 'island.png')`
+  flow. Two-pass deposit at different alpha thresholds gives
+  multi-material terrain (sand outline + dirt core) from a single
+  source image.
+
+### Performance — TerrainRenderer hot loop
+
+~10× speedup on chunk repaint (0.080 ms → 0.007 ms per 128×128
+chunk on Node 24). Replaced the per-pixel
+`materials.get(id)` + 4-byte writes with a 256-entry packed-RGBA
+LUT keyed by material id, written through a `Uint32Array` view of
+the `ImageData` data buffer. The hot loop is now `pixels32[i] =
+colorLut[bitmapData[i]]`. Two new exported helpers,
+`paintChunkPixels(bitmapData, pixels32, colorLut)` and
+`buildColorLut(materials)`, both pure and unit-tested without a
+Phaser scene. The LUT is rebuilt every repaint (256 ops,
+amortized); materials registered after construction are reflected
+on the next repaint automatically.
+
+### Tests
+
+- 8 new tests in `tests/phaser/TerrainRenderer.test.ts` covering
+  packed-RGBA correctness, byte-level round-trip through the
+  `Uint32Array` view, and a 100-iteration 128×128 perf-smoke test.
+- Total suite now 236 tests across 19 files, ~1.4 s.
+
+---
+
+## [v0.3.0] — 2026-04-30
+
+Phase 3 of `docs-dev/02-roadmap.md`: Phaser integration.
 
 ### Added — `src/phaser/`
 
 - `TerrainRenderer` — per-chunk canvas-backed visuals. Each chunk gets its own `<canvas>` registered via `textures.addCanvas`, repainted from the bitmap on `repaintDirty()`.
 - `DestructibleTerrain` — composite GameObject. Owns the bitmap, renderer, and (optionally) the physics adapter + queue. Public surface: `carve.{circle,polygon,fromAlphaTexture}`, `deposit.{...}`, `isSolid`, `sampleMaterial`, `raycast`, `surfaceY`, `extractDebris`, `update`. All scene-coord in / scene-coord out. The `chunk.contours` field is populated on rebuild so debug renderers can read live colliders. Origin alignment: optional `x`/`y` constructor options shift both rendering and physics-body placement.
-- `PixelPerfectPlugin` — `Phaser.Plugins.ScenePlugin`. Mapped to `scene.pixelPerfect`. Provides `terrain(options)` factory (scene supplied automatically), tracks created terrains, auto-flushes them on `POST_UPDATE`, auto-destroys on `SHUTDOWN` / `DESTROY`. Module-augments `Phaser.Scene` so `pixelPerfect` is typed.
+- `PixelPerfectPlugin` — `Phaser.Plugins.ScenePlugin`. Mapped to `scene.pixelPerfect`. Provides `terrain(options)` and `sprite(x, y, key, frame?)` factories (scene supplied automatically), tracks created terrains, auto-flushes them on `POST_UPDATE`, auto-destroys on `SHUTDOWN` / `DESTROY`. Module-augments `Phaser.Scene` so `pixelPerfect` is typed.
+- `PixelPerfectSprite` — extends `Phaser.GameObjects.Sprite`. `overlapsPixelPerfect(other)` and `overlapsTerrain(terrain)` go through pure `core/queries/AlphaOverlap` helpers (`maskMaskOverlap`, `maskBitmapOverlap`). Mask is extracted lazily on first overlap, cached, invalidated on frame change; respects `flipX` / `flipY`. v1 limits: no rotation, no scaling.
+- `core/queries/AlphaOverlap` — pure helpers + `AlphaMask` type. 16 unit tests cover threshold conversion from `AlphaSource`, mask-vs-mask overlap with checkerboard / partial / disjoint cases, and mask-vs-`ChunkedBitmap` overlap including out-of-bounds placements.
 
 ### Changed — collider model
 
@@ -34,14 +99,15 @@ Why each step:
 
 ### Demos
 
-Four runnable demos under `examples/`, all built into `docs/` (committed):
+Five runnable demos under `examples/`, all built into `docs/` (committed):
 
 - 01 — basic rendering: `TerrainRenderer` painting a procedural bitmap.
 - 02 — click to carve: input + carve + per-chunk repaint.
 - 03 — physics colliders: Box2D world, drop balls, debug overlay.
 - 04 — falling debris: `DebrisDetector` + dynamic bodies; floating brick falls on load, shelves drop as L-shapes when their necks are severed.
+- 05 — pixel-perfect sprite: drag a filled-circle sprite onto a ring sprite + a terrain patch; outline color encodes AABB-only vs pixel-perfect overlap.
 
-Demo 04 is the verification path for the plugin migration: it uses `this.pixelPerfect.terrain({...})` instead of `new DestructibleTerrain(...)`.
+Demo 04 was the verification path for the plugin migration: it uses `this.pixelPerfect.terrain({...})` instead of `new DestructibleTerrain(...)`.
 
 Build / deploy: `npm run build` writes the demo bundle into `docs/` (committed). No CI; rebuild and commit alongside source changes. The vite config uses `base: './'` so the output works at any URL prefix (root, `/pixel-perfect/`, `file://`, etc.).
 

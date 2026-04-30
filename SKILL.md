@@ -11,11 +11,11 @@ Phase progression:
 - ✅ **Phase 1 — `src/core/`** (`v0.1.0`): `ChunkedBitmap`, `Materials`, `Carve` / `Deposit` (circle / polygon / fromAlphaTexture), `MarchingSquares`, `DouglasPeucker`, `FloodFill`, `Spatial` queries.
 - ✅ **Phase 2 — `src/physics/`** (`v0.2.0`): typed `phaser-box2d` binding, `Box2DAdapter` (static terrain + dynamic debris bodies), `DeferredRebuildQueue` (end-of-frame body churn), `DebrisDetector` (FloodFill + contour extraction).
 - ✅ Phase 2.5 retired and superseded by Phase 3's per-chunk + polygon-triangulation collider model. Cross-chunk stitching is no longer required.
-- 🟡 **Phase 3 — `src/phaser/`** (in flight): `TerrainRenderer`, `DestructibleTerrain` GameObject, `PixelPerfectPlugin` (the public entry point — `scene.pixelPerfect.terrain({...})`). Collider model is now per-chunk, two-sided polygons triangulated via earcut. `PixelPerfectSprite` (alpha-aware sprite collision) is the last Phase 3 deliverable.
-- ⬜ Phase 4 — examples (Worms-style demo, image-based terrain, more).
-- ⬜ Phase 5 — docs & polish.
+- ✅ **Phase 3 — `src/phaser/`** (`v0.3.0`): `TerrainRenderer`, `DestructibleTerrain` GameObject, `PixelPerfectPlugin` (the public entry point — `scene.pixelPerfect.terrain({...})`, `.sprite(...)`), `PixelPerfectSprite` (alpha-aware sprite-vs-sprite + sprite-vs-terrain collision). Collider model is per-chunk, two-sided polygons triangulated via earcut, with snapshot/restore of dynamic bodies across each rebuild.
+- ✅ **Phase 4 — examples + perf pass** (`v0.4.0`): Worms-style demo (`06`), image-based terrain demo (`07`), and a ~10× speedup on the `TerrainRenderer` hot loop via packed-RGBA LUT + `Uint32Array` view of `ImageData`.
+- 🟡 **Phase 5 — docs & polish** (in flight): TypeDoc API ref, CONTRIBUTING / CoC / issue templates landed; remaining items are a hero gif and the `v1.0.0` final pass.
 
-The four runnable demos are in `examples/`, built into `docs/`:
+The seven runnable demos are in `examples/`, built into `docs/`:
 
 | Demo | What it shows |
 |---|---|
@@ -23,6 +23,9 @@ The four runnable demos are in `examples/`, built into `docs/`:
 | 02 — click to carve | input + carve + per-chunk repaint |
 | 03 — physics colliders | Box2D world, drop balls, debug overlay |
 | 04 — falling debris | DebrisDetector + dynamic bodies, L-shaped pieces falling |
+| 05 — pixel-perfect sprite | drag a circle onto a ring + terrain; bbox vs pixel-perfect overlap |
+| 06 — worms-style | walking circle + grenades that carve and detach cliff slabs |
+| 07 — image-based terrain | stamp a PNG / canvas alpha mask onto the bitmap, then carve |
 
 For current in-flight work and known limitations, see `docs-dev/PROGRESS.md`.
 
@@ -188,7 +191,9 @@ Stamps an alpha mask onto the bitmap. The source is an `AlphaSource = { data: Ui
 
 ### `MarchingSquares.extract(chunk, bitmap) → Contour[]`
 
-Extracts contour polygons from one chunk. Output vertices are in world coordinates at half-integer positions (cell-edge midpoints). Saddle cells use the TL-BR-joined convention uniformly so adjacent chunks produce topologically consistent stitching. Each contour reports `closed: true` if the polyline closes within the chunk's padded sample window, or `closed: false` if it extends across a chunk boundary — the physics adapter is responsible for joining open chains across chunks. Walks each segment with solid on the visual-LEFT side, so closed solid blobs walk visually-clockwise (math-CCW in y-down).
+Extracts contour polygons from one chunk. Output vertices are in world coordinates at half-integer positions (cell-edge midpoints). Saddle cells use the TL-BR-joined convention uniformly so adjacent chunks produce topologically consistent contours. Each contour reports `closed: true` if the polyline closes within the chunk's padded sample window. Walks each segment with solid on the visual-LEFT side, so closed solid blobs walk visually-clockwise (math-CCW in y-down).
+
+For the destructible-terrain pipeline, the physics adapter doesn't call `MarchingSquares.extract` directly — it goes through `chunkToContours(chunk, bitmap, epsilon)` (in `src/physics/`), which builds a 1-pixel-air-padded temp bitmap of just the chunk's pixels so every contour closes locally regardless of how the surrounding world looks. This keeps each chunk's collider self-contained and lets carving in chunk A leave chunks B…N untouched.
 
 ### `DouglasPeucker.simplify(contour, epsilon) → Contour`
 

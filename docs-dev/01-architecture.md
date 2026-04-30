@@ -28,7 +28,7 @@
                   ▼
 ┌─────────────────────────────────────────────────────────┐
 │ Physics layer (src/physics/)                            │
-│  - Box2DAdapter: chain-body lifecycle                   │
+│  - Box2DAdapter: polygon-body lifecycle                 │
 │  - DeferredRebuildQueue: end-of-frame flush             │
 │  - DebrisDetector: detached island → dynamic body       │
 │  - Adapter interface (allows Matter.js adapter later)   │
@@ -162,12 +162,12 @@ When destruction may have detached a chunk of terrain, run flood fill from "anch
 
 When a detached island is found:
 
-1. Extract its contour (already have it from marching squares per chunk; need to combine cross-chunk).
+1. Extract its contour via `componentToContours` — flood fill identified the cells, this builds a temp bitmap of just those cells (with 1 px padding) and runs marching squares on it. The component's contour comes back closed in one extraction pass; no cross-chunk stitching needed since the temp bitmap is sized to the component itself.
 2. Remove its cells from the static bitmap (write `0`).
-3. Emit a `debris:detached` event with the contour and material info.
-4. The Phaser/physics layer creates a dynamic Box2D body and a sprite for the debris.
+3. Hand the contour + dominant material to `DeferredRebuildQueue.enqueueDebris(...)`.
+4. On the next queue flush, the adapter creates a dynamic Box2D body for the debris (triangulated polygon shapes — see "Why polygons" below). The user wires a sprite to it via `terrain`'s `onDebrisCreated` callback.
 
-Performance: full-world flood fill is O(width × height). For a 4 MB world this is ~5ms — acceptable as a per-event cost, not per-frame. Optimization: only run flood fill if the destruction crossed a "narrow connection" heuristic (configurable; default = always run when ≥ 3 chunks dirtied in one operation).
+Performance: full-world flood fill is O(width × height). For a 4 MB world this is ~5ms — acceptable as a per-event cost, not per-frame. The Phase-3 demos run `extractDebris()` every frame because the bitmaps are small (≤ 512×320); for larger worlds, gate it behind "did the carve plausibly detach something?" heuristics.
 
 ### Spatial queries
 
@@ -185,43 +185,46 @@ These are microsecond operations and replace dozens of Box2D queries that game l
 
 ### Box2DAdapter
 
-Owns the lifecycle of all terrain Box2D bodies. Each chunk has zero or more `b2ChainShape` bodies attached to a single static `b2Body` for that chunk. The adapter maintains an internal `Map<Chunk, BodyId[]>`; the core `Chunk` type does not carry body ids.
+Owns the lifecycle of all terrain Box2D bodies. **One static `b2Body` per chunk that has solid pixels**, made of N triangulated `b2PolygonShape`s — the chunk's solid mass extracted via `chunkToContours` and run through earcut. The adapter maintains an internal `Map<Chunk, BodyId>` (single body per chunk; the core `Chunk` type does not carry body ids).
 
 Key API:
 
 ```ts
 class Box2DAdapter {
-  rebuildChunk(chunk: Chunk): void;
+  rebuildChunk(chunk: Chunk, contours: readonly Contour[]): void;
   destroyChunk(chunk: Chunk): void;
-  createDebrisBody(contour: Contour, material: Material): BodyId;
-  flush(): void;  // called once per frame, end of update
+  createDebrisBody(contour: Contour, material: Material): BodyId | null;
+  snapshotDynamicBodies(aabbPx): BodySnapshot[];
+  restoreDynamicBodies(snapshots): void;
+  dispose(): void;
 }
 ```
 
-`rebuildChunk` is queued via the `DeferredRebuildQueue`, never executed inline. The queue is drained in `flush()`, which runs after `world.step()`.
+`rebuildChunk` is queued via the `DeferredRebuildQueue`, never executed inline. The queue does the per-chunk extraction, calls `rebuildChunk` for each dirty chunk, and wraps the body churn with `snapshotDynamicBodies` / `restoreDynamicBodies` so dynamic bodies don't drift while their underlying static body is destroyed and recreated.
 
-Why chain shapes (not polygon shapes):
+Why **polygons** (not chain shapes):
 
-- Chain shapes handle "ghost vertices" automatically, eliminating snag-on-seam bugs at chunk boundaries.
-- Chains support arbitrary topology including holes (one chain per closed contour).
-- Chains are static-only by design, which matches our terrain semantics.
+- Two-sided collision. A dynamic body that drifts to the wrong side of a chain shape's seam during a destroy/recreate cycle isn't seen as colliding (chain normals are one-sided) and tunnels. Two-sided polygons resolve penetration regardless of which side the body ended up on.
+- Non-convex debris (e.g. an L-shape left over after a carve severs a neck) doesn't need a fallback path. Earcut handles non-convex outlines directly; closed-chain dynamic bodies don't act as solid masses, polygons do.
+- Static terrain bodies and dynamic debris bodies share the same shape type, so `contourToTriangles(bodyId, contour, opts)` is the only shape-creation entry point.
 
-Dynamic debris bodies use `b2PolygonShape` (or `b2ChainShape` with `IsLoop = true` for hollow shapes). Decision rule: if contour is convex and ≤8 vertices, use polygon; otherwise decompose or use chain.
+Cost: more shapes per blob (~38 triangles for a 40-vertex outline vs 40 chain edges). Box2D handles triangle counts in the thousands without complaint.
 
 ### DeferredRebuildQueue
 
 ```ts
 class DeferredRebuildQueue {
+  private bitmap: ChunkedBitmap;
   private dirtyChunks: Set<Chunk>;
-  private dynamicOps: PendingOp[];
+  private pendingDebris: PendingDebris[];
 
   enqueueChunk(chunk: Chunk): void;
   enqueueDebris(contour: Contour, material: Material): void;
-  flush(adapter: Box2DAdapter): void;
+  flush(adapter: Box2DAdapter, options?: FlushOptions): void;
 }
 ```
 
-Single-threaded. Drained at end-of-frame. Per-frame budget: rebuild up to N chunks (default 4) to bound worst-case cost; remaining chunks roll to next frame. This is a simple form of time-slicing; sufficient for v1.
+Single-threaded. `flush()` snapshots dynamic bodies in the union AABB of the dirty chunks, iterates dirty chunks in `(cy, cx)` order extracting each via `chunkToContours` and calling `rebuildChunk` (skipping any chunk whose contour list is bit-identical to last frame's), then restores the dynamic bodies. Debris is processed unconditionally — the dynamic bodies the queue creates would visibly pop in if delayed.
 
 ### DebrisDetector
 
@@ -232,43 +235,57 @@ Runs flood fill, identifies detached regions, returns a list of debris contours.
 ### Plugin registration
 
 ```ts
-class PixelPerfectPlugin extends Phaser.Plugins.BasePlugin {
-  init(): void;
-  // exposes scene-level factories: scene.pixelPerfect.terrain(...), .sprite(...)
+class PixelPerfectPlugin extends Phaser.Plugins.ScenePlugin {
+  boot(): void;
+  // factories: scene.pixelPerfect.terrain(...), .sprite(...)
 }
 ```
 
-Registered as a global plugin. Adds `scene.pixelPerfect` namespace.
+Registered as a **scene** plugin under `mapping: 'pixelPerfect'`, so `scene.pixelPerfect` is available inside any scene. The plugin auto-flushes terrain rebuilds and chunk repaints on the scene's `POST_UPDATE` event, and auto-destroys tracked terrains on `SHUTDOWN` / `DESTROY`. Sprite GameObjects use Phaser's regular GameObject lifecycle; the plugin doesn't track them.
 
 ### DestructibleTerrain GameObject
 
-A composite GameObject that owns:
+A composite that owns:
 
-- A `ChunkedBitmap` instance
-- A `Box2DAdapter` instance
-- A grid of `DynamicTexture`s (one per chunk) for visual rendering
-- An update hook that flushes the rebuild queue and pushes texture updates
+- A `ChunkedBitmap` instance.
+- A `TerrainRenderer` (one canvas-backed Phaser texture per chunk).
+- Optional `Box2DAdapter` + `DeferredRebuildQueue` (when `worldId` is supplied).
 
-Public API on the GameObject:
+Public API:
 
 ```ts
-terrain.carve.circle(x, y, r);
+terrain.carve.circle(sceneX, sceneY, r);
 terrain.carve.polygon(points);
-terrain.carve.fromAlpha(x, y, textureKey);
-terrain.deposit.circle(x, y, r, materialId);
-terrain.isSolid(x, y);
+terrain.carve.fromAlphaTexture(source, dstX, dstY, threshold?);
+terrain.deposit.circle(sceneX, sceneY, r, materialId);
+terrain.deposit.polygon(points, materialId);
+terrain.deposit.fromAlphaTexture(source, dstX, dstY, materialId, threshold?);
+terrain.isSolid(sceneX, sceneY);
+terrain.sampleMaterial(sceneX, sceneY);
 terrain.raycast(x1, y1, x2, y2);
-terrain.on('debris:detached', handler);
-terrain.on('chunk:rebuilt', handler);  // useful for debugging
+terrain.surfaceY(sceneX);
+terrain.extractDebris(anchor?, simplificationEpsilon?); // detect + remove + enqueue
+terrain.update();                                       // manual flush trigger
 ```
 
-Visual rendering:
+The debris notification surface is a constructor option, not a `.on(...)` event:
 
-- Each chunk has its own `DynamicTexture` sized to chunk dimensions.
-- On `visualDirty`, repaint the chunk's texture from its bitmap.
-- For flat-color materials: write color pixels directly via `setPixel`.
-- For textured materials (v1.1+): sample a tile texture by `(worldX, worldY)` modulo tile size.
-- Use Phaser v4's partial DynamicTexture upload feature when available.
+```ts
+this.pixelPerfect.terrain({
+    /* ... */
+    onDebrisCreated: ({ bodyId, contour, material }) => {
+        // spawn a Phaser Graphics traced from contour, sync it
+        // every frame to the body's transform.
+    },
+});
+```
+
+Visual rendering — `TerrainRenderer`:
+
+- Each chunk has its own `<canvas>` (size `chunkSize × chunkSize`) registered with Phaser's TextureManager via `addCanvas`, and a `Phaser.GameObjects.Image` placed at the chunk's scene position.
+- On `visualDirty`, the hot loop walks the chunk's bitmap once, indexes a 256-entry packed-RGBA LUT keyed by material id, and writes through a `Uint32Array` view of the underlying `ImageData.data` buffer — one byte read + one indexed lookup + one 32-bit write per pixel. Then `putImageData` + `texture.refresh()` for GPU re-upload.
+- For textured materials (v1.1+): the LUT is per-pixel-color today; replace with per-pixel sampler / shader for tiled textures later.
+- Phaser v4's partial DynamicTexture upload is a follow-up if profiling shows GPU upload as the bottleneck — currently it's not.
 
 ### PixelPerfectSprite
 
@@ -283,40 +300,48 @@ This is the secondary headline feature. It addresses a recurring Phaser communit
 ## Data flow: a destruction event
 
 ```
-1. game code calls terrain.carve.circle(1000, 500, 40)
+1. game code calls terrain.carve.circle(sceneX, sceneY, r)
    ↓
 2. core/carve.ts iterates affected pixels, writes 0s
    ↓
 3. each affected chunk gets dirty=true, visualDirty=true
    ↓
-4. DebrisDetector runs flood fill, finds 1 detached island
+4. (optional) game calls terrain.extractDebris() — flood fill from
+   anchors finds detached components, removes their cells from the
+   bitmap (more dirty chunks), enqueues a dynamic body per component
    ↓
-5. core emits 'debris:detected' with island contour
+5. (frame ends, scene.update completes)
    ↓
-6. (frame ends, scene.update completes)
+6. plugin's POST_UPDATE hook calls terrain.update(), which calls
+   queue.flush(adapter):
    ↓
-7. plugin's postUpdate hook calls box2dAdapter.flush()
+7. queue.flush:
+      a. Snapshot every dynamic body whose AABB overlaps the
+         union AABB of the dirty chunks (transform, lin/ang vel,
+         awake flag).
+      b. For each dirty chunk in (cy, cx) order:
+           i.   chunkToContours → marching squares + Douglas-Peucker
+                 within the chunk's pixels (1 px air padding).
+           ii.  If contoursEqual(cached, new), skip rebuild.
+           iii. Otherwise destroy old static body, create new one
+                 with triangulated polygon shapes per contour.
+      c. For each pending debris contour: create a dynamic body
+         (centroid-translated, triangulated) and fire the
+         onDebrisCreated callback so the user can spawn a visual.
+      d. Restore dynamic bodies to their snapshot, gating the awake
+         flag on whether the body's AABB still overlaps any static
+         shape (avoids the "ghost-float" bug).
    ↓
-8. for each dirty chunk:
-      a. marching squares on bitmap → contours
-      b. Douglas-Peucker on contours
-      c. destroy old bodies for chunk
-      d. create new chain bodies
-      e. clear dirty flag
+8. for each visualDirty chunk:
+      a. paintChunkPixels writes the chunk's solid bitmap to the
+         per-chunk canvas via a packed-RGBA LUT + Uint32Array view.
+      b. canvas → texture refresh.
+      c. clear visualDirty flag.
    ↓
-9. for each detected debris:
-      a. create dynamic Box2D body with polygon/chain
-      b. create sprite for visual
-      c. user-side: parented or independent, user choice
-   ↓
-10. for each visualDirty chunk:
-       a. repaint DynamicTexture from bitmap
-       b. clear visualDirty flag
-   ↓
-11. Phaser renders normally
+9. Phaser renders normally.
 ```
 
-Steps 1-5 happen synchronously inside the carve call. Steps 6-10 happen at end of frame. Step 11 is unchanged from any Phaser game.
+Steps 1-4 happen synchronously inside the user's update logic. Steps 6-8 happen at the scene's `POST_UPDATE` event (or whenever the user calls `terrain.update()` manually — demos that wire their own physics step do it manually so colliders are fresh before `world.Step`). Step 9 is unchanged from any Phaser game.
 
 ## Coordinate systems
 
@@ -347,10 +372,13 @@ src/core/
   index.ts                  # public re-exports
 
 src/physics/
-  Box2DAdapter.ts           # body lifecycle
-  DeferredRebuildQueue.ts   # end-of-frame flush
-  DebrisDetector.ts         # detached island → dynamic body
-  ContourToBody.ts          # contour → b2ChainShape / b2PolygonShape
+  box2d.ts                  # typed binding to phaser-box2d
+  types.ts                  # branded BodyId / ChainId / WorldId
+  Box2DAdapter.ts           # body lifecycle + snapshot/restore
+  DeferredRebuildQueue.ts   # end-of-frame flush, per-chunk
+  DebrisDetector.ts         # detached island detection
+  ContourExtractor.ts       # chunkToContours + componentToContours
+  ContourToBody.ts          # contour → b2PolygonShape (triangulated)
   index.ts
 
 src/phaser/
@@ -363,34 +391,52 @@ src/phaser/
 src/index.ts                # top-level public API
 ```
 
-## Public API surface (target shape)
+## Public API surface
 
 ```ts
+import * as Phaser from 'phaser';
 import { PixelPerfectPlugin } from 'pixel-perfect';
-// or, advanced: import { ChunkedBitmap, MarchingSquares } from 'pixel-perfect/core';
+// Advanced: import { ChunkedBitmap, MarchingSquares } from 'pixel-perfect/core';
 
-// In Phaser game config:
-plugins: { global: [{ key: 'PixelPerfect', plugin: PixelPerfectPlugin, start: true }] }
+// Register the plugin once per game.
+new Phaser.Game({
+    // ...
+    plugins: {
+        scene: [
+            {
+                key: 'PixelPerfectPlugin',
+                plugin: PixelPerfectPlugin,
+                mapping: 'pixelPerfect',
+            },
+        ],
+    },
+});
 
-// In a scene:
+// In a scene's create():
 const terrain = this.pixelPerfect.terrain({
-  width: 4096,
-  height: 1024,
-  chunkSize: 128,
-  pixelsPerMeter: 32,
-  fromImage: 'island-mask',
-  materials: [
-    { id: 1, name: 'dirt', color: 0x8b5a3c, density: 1.0, friction: 0.7, restitution: 0.1, destructible: true, destructionResistance: 0 },
-    { id: 2, name: 'stone', color: 0x666666, density: 2.5, friction: 0.9, restitution: 0.05, destructible: true, destructionResistance: 0.5 },
-  ],
-  physicsWorld: this.box2dWorld,
+    width: 1024,
+    height: 512,
+    chunkSize: 64,
+    pixelsPerMeter: 32,
+    x: 64,
+    y: 64,
+    materials: [
+        { id: 1, name: 'dirt', color: 0x8b5a3c, density: 1, friction: 0.7, restitution: 0.1, destructible: true, destructionResistance: 0 },
+        { id: 2, name: 'stone', color: 0x666666, density: 2.5, friction: 0.9, restitution: 0.05, destructible: true, destructionResistance: 0.5 },
+    ],
+    worldId: this.worldId, // optional — pure-visual terrain works without it
+    onDebrisCreated: ({ bodyId, contour, material }) => {
+        // spawn a Phaser Graphics or Image for the debris body
+    },
 });
 
 terrain.carve.circle(1000, 500, 40);
-terrain.on('debris:detached', (debris) => { /* ... */ });
+// Source-from-PNG: stamp the alpha mask into the bitmap.
+// const imageData = ctx.getImageData(0, 0, w, h);
+// terrain.deposit.fromAlphaTexture(imageData, dstX, dstY, /* materialId */ 1);
 
 // Sprite collision:
-const sprite = this.pixelPerfect.sprite(this, 100, 100, 'player');
+const sprite = this.pixelPerfect.sprite(100, 100, 'player');
 if (sprite.overlapsPixelPerfect(otherSprite)) { /* ... */ }
 if (sprite.overlapsTerrain(terrain)) { /* ... */ }
 ```
