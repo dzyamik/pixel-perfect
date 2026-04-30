@@ -18,7 +18,7 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | 4 — examples | (interleaved with Phase 3) | — |
 | 5 — docs & polish | not started | — |
 
-Test suite: 206 tests across 17 files, ~1.3 s. typecheck and lint clean.
+Test suite: 210 tests across 17 files, ~1.5 s. typecheck and lint clean.
 
 ---
 
@@ -44,7 +44,92 @@ Build / deploy: `npm run build` writes the demo bundle into `docs/` (committed).
 
 ---
 
-## RESOLVED (2026-04-30): dynamic bodies tunnel through terrain on continuous carving
+## RESOLVED (2026-04-30): dynamic bodies vibrate / tunnel during continuous carve
+
+This is the *follow-up* fix to the polygon triangulation work below. After
+A landed, demo 04 stopped behaving like "non-convex shelves don't fall as
+solids," but a more subtle issue remained: while the user holds and drags
+the carve brush, **every** dynamic body in the world (even ones nowhere
+near the cursor) would jitter, sometimes embed in the ground, sometimes
+fall through it.
+
+### Root cause
+
+Each terrain rebuild destroys the old static body and creates a fresh one.
+`b2DestroyShapeInternal` (PhaserBox2D.js:3142–3168) destroys every contact
+that touches the destroyed shape and **wakes the contacted bodies**
+(`wakeBodies = true` at line 3173 is hardcoded; there's no public way to
+suppress it). With the entire ground+shelves of demo 04 being a *single*
+connected blob, a carve anywhere on it rebuilt that one body, which woke
+every body resting on it. Each woken body then ran one step's worth of
+gravity in free-fall (~0.07 px at gravity = 15, dt = 1/60), then resolved
+penetration against the new polygons — restitution kicks the body back
+upward at ~10% of the impact speed. Repeat at 60 Hz → continuous jitter.
+Cumulative drift could push a body laterally into a region the user had
+actually carved away, where it would fall through.
+
+### Fix (this commit)
+
+**Snapshot every dynamic body's kinematic state before the rebuild,
+restore it after.** New API on `Box2DAdapter`:
+
+- `snapshotDynamicBodies(aabbPx)` — uses `b2World_OverlapAABB` to find
+  every shape overlapping a pixel-space AABB, dedupes to bodies,
+  filters to dynamic via `b2Body_GetType`, captures
+  `(transform, linearVelocity, angularVelocity, awake)`.
+- `restoreDynamicBodies(snapshots)` — writes the state back, restoring
+  the awake flag *last* so `SetTransform` / `SetLinearVelocity` (which
+  internally wake) don't override the asleep state.
+
+`DeferredRebuildQueue.rebuildTerrain` snapshots over the bitmap's full
+pixel region before doing the global per-blob rebuild loop, then restores
+afterward.
+
+### What this fixes
+
+- **Sleeping settled bodies stay asleep.** No gravity integration on
+  sleeping bodies → no per-frame sink → no bounce. Visible jitter gone.
+- **Awake bodies in flight keep their motion.** No spurious velocity
+  loss/gain across rebuilds.
+- **No lateral drift into carved-out holes.** The body's transform is
+  written back exactly, so it stays where it was.
+
+### Behavior shift to be aware of
+
+If the user carves directly *under* a settled body, the body's contact
+support disappears — but the snapshot captured `awake = false` and we
+restore it to `false`. So the body falls one frame *late* (the next
+disturbance — gravity once awake, an impulse, etc. — wakes it). In
+practice the next world step finds the body's AABB no longer overlapping
+the terrain's polygons in the right way; Box2D wakes it for solver
+attention, and gravity takes over. Visually imperceptible, but it's a
+real change worth knowing.
+
+### Files involved
+
+- `src/physics/box2d.ts` — extended typed binding with `b2AABB`,
+  `b2DefaultQueryFilter`, `b2World_OverlapAABB`, `b2Shape_GetBody`,
+  `b2Body_GetType`, transform/velocity/awake getters and setters.
+- `src/physics/Box2DAdapter.ts` — new `BodySnapshot`,
+  `snapshotDynamicBodies`, `restoreDynamicBodies`.
+- `src/physics/DeferredRebuildQueue.ts` — wraps the `rebuildTerrain`
+  body-churn loop with snapshot/restore.
+- `tests/integration/Phase2Pipeline.test.ts` — new
+  "snapshot/restore across rebuild" describe block: transform
+  preservation, velocity preservation, sleep state preservation, and
+  a sanity check that static (chunk) bodies are excluded.
+
+### Visual verification
+
+User confirmation pending. To verify: `npm run dev` →
+`http://localhost:5173/03-physics/` and `/04-falling-debris/`. Settle a
+body, then click-and-hold the carve brush *anywhere* on the terrain
+(including far from the body). Expected: the body stays put, no jitter.
+Carve directly under the body: it falls.
+
+---
+
+## RESOLVED (2026-04-30): non-convex debris doesn't act solid; one-sided chains tunnel under rebuilds
 
 **Status:** fixed by switching every collider — terrain *and* debris — from
 `b2ChainShape` to triangulated `b2PolygonShape`s via earcut. Kept here as a

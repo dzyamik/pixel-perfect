@@ -1,12 +1,47 @@
 import type { Chunk, Contour, Material } from '../core/index.js';
 import {
+    b2AABB,
     b2BodyType,
+    b2Body_GetAngularVelocity,
+    b2Body_GetLinearVelocity,
+    b2Body_GetTransform,
+    b2Body_GetType,
+    b2Body_IsAwake,
+    b2Body_SetAngularVelocity,
+    b2Body_SetAwake,
+    b2Body_SetLinearVelocity,
+    b2Body_SetTransform,
     b2CreateBody,
     b2DefaultBodyDef,
+    b2DefaultQueryFilter,
     b2DestroyBody,
+    b2Shape_GetBody,
+    b2Vec2,
+    b2World_OverlapAABB,
 } from './box2d.js';
 import { contourToTriangles } from './ContourToBody.js';
 import type { BodyId, WorldId } from './types.js';
+
+/**
+ * A frozen copy of one dynamic body's kinematic state at a moment in
+ * time. Returned by {@link Box2DAdapter.snapshotDynamicBodies} and
+ * consumed by {@link Box2DAdapter.restoreDynamicBodies}.
+ *
+ * The snapshot is intentionally narrow — only the state that is clobbered
+ * when a contact is destroyed and re-resolved across a rebuild. Mass,
+ * shapes, joints, etc. are left alone.
+ */
+export interface BodySnapshot {
+    bodyId: BodyId;
+    px: number;
+    py: number;
+    rc: number;
+    rs: number;
+    vx: number;
+    vy: number;
+    omega: number;
+    awake: boolean;
+}
 
 export interface Box2DAdapterOptions {
     /** The Box2D world this adapter creates bodies in. */
@@ -216,6 +251,116 @@ export class Box2DAdapter {
     /** Destroys a body the adapter previously created. */
     destroyBody(bodyId: BodyId): void {
         b2DestroyBody(bodyId);
+    }
+
+    /**
+     * Captures the kinematic state of every dynamic body whose AABB
+     * overlaps the supplied **pixel-space** AABB.
+     *
+     * Used by {@link DeferredRebuildQueue} to freeze bodies across a
+     * terrain-collider rebuild. Box2D's `b2DestroyShapeInternal` wakes
+     * bodies whose contacts touch destroyed shapes (PhaserBox2D.js:3173
+     * hardcodes `wakeBodies = true`); without snapshot/restore, every
+     * carve frame would wake settled bodies, integrate one step of
+     * gravity on them, and let the resulting penetration ricochet into
+     * a continuous jitter on the body's resting surface.
+     *
+     * Filtering: only bodies whose `b2Body_GetType` is `b2_dynamicBody`
+     * are returned. Static and kinematic bodies are skipped because
+     * we never write their state. Bodies are deduped (multiple shapes
+     * on the same body produce one snapshot).
+     */
+    snapshotDynamicBodies(aabbPx: {
+        minX: number;
+        minY: number;
+        maxX: number;
+        maxY: number;
+    }): BodySnapshot[] {
+        // Convert pixel AABB to meter AABB with the same origin offset
+        // and y-flip the adapter applies to bodies. The result is a
+        // valid Box2D AABB (lower < upper after the y-flip-and-swap).
+        const ppm = this.pixelsPerMeter;
+        const lx = (aabbPx.minX + this.originPxX) / ppm;
+        const lyRaw = -(aabbPx.maxY + this.originPxY) / ppm;
+        const ux = (aabbPx.maxX + this.originPxX) / ppm;
+        const uyRaw = -(aabbPx.minY + this.originPxY) / ppm;
+        const aabb = new b2AABB(
+            Math.min(lx, ux),
+            Math.min(lyRaw, uyRaw),
+            Math.max(lx, ux),
+            Math.max(lyRaw, uyRaw),
+        );
+
+        const seen = new Set<unknown>();
+        const snaps: BodySnapshot[] = [];
+        const filter = b2DefaultQueryFilter();
+        b2World_OverlapAABB(
+            this.worldId,
+            aabb,
+            filter,
+            (shapeId): boolean => {
+                const bodyId = b2Shape_GetBody(shapeId);
+                // The bodyId is an opaque struct of the form
+                // `{ index1, world0, revision }`. Dedupe by `index1`
+                // since multiple shapes on one body all return the same
+                // body record. Cast through `unknown` because BodyId
+                // is branded externally; this is the one place the
+                // adapter looks at the runtime shape.
+                const key = (bodyId as unknown as { index1: number }).index1;
+                if (seen.has(key)) return true;
+                seen.add(key);
+                if (b2Body_GetType(bodyId) !== b2BodyType.b2_dynamicBody) {
+                    return true;
+                }
+                const xf = b2Body_GetTransform(bodyId);
+                const v = b2Body_GetLinearVelocity(bodyId);
+                snaps.push({
+                    bodyId,
+                    px: xf.p.x,
+                    py: xf.p.y,
+                    rc: xf.q.c,
+                    rs: xf.q.s,
+                    vx: v.x,
+                    vy: v.y,
+                    omega: b2Body_GetAngularVelocity(bodyId),
+                    awake: b2Body_IsAwake(bodyId),
+                });
+                return true;
+            },
+            null,
+        );
+        return snaps;
+    }
+
+    /**
+     * Restores a previously captured set of body snapshots. Writes the
+     * transform, linear/angular velocity, and awake flag back. Bodies
+     * whose handle has since gone invalid (e.g. the user destroyed them
+     * mid-frame) are silently skipped — the snapshot loop in
+     * `DeferredRebuildQueue` runs at end-of-frame after the user's logic.
+     *
+     * Critically, the awake flag is the last thing restored. `SetTransform`
+     * and `SetLinearVelocity` may wake a body internally; restoring
+     * `awake = false` after those calls puts settled bodies back to
+     * sleep so the next world step skips gravity integration on them.
+     */
+    restoreDynamicBodies(snapshots: readonly BodySnapshot[]): void {
+        for (const s of snapshots) {
+            // Skip if the body has been destroyed since snapshot. We can't
+            // check b2Body_IsValid here without exposing it everywhere;
+            // the cheap proxy is to wrap individual calls in try/catch
+            // — but the `phaser-box2d` 1.1 setters throw if the index is
+            // freed, so we need to rely on the queue not snapshotting
+            // bodies the user is destroying inside the same flush.
+            b2Body_SetTransform(
+                s.bodyId,
+                new b2Vec2(s.px, s.py),
+                { c: s.rc, s: s.rs },
+            );
+            b2Body_SetLinearVelocity(s.bodyId, new b2Vec2(s.vx, s.vy));
+            b2Body_SetAngularVelocity(s.bodyId, s.omega);
+            b2Body_SetAwake(s.bodyId, s.awake);
+        }
     }
 
     /**

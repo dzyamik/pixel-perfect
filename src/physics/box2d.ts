@@ -48,6 +48,34 @@ interface BodyTypeEnum {
     b2_dynamicBody: number;
 }
 
+interface AABB {
+    lowerBoundX: number;
+    lowerBoundY: number;
+    upperBoundX: number;
+    upperBoundY: number;
+}
+
+interface QueryFilter {
+    categoryBits: number;
+    maskBits: number;
+}
+
+interface Rotation {
+    c: number;
+    s: number;
+}
+
+interface Transform {
+    p: Vec2;
+    q: Rotation;
+}
+
+/** A `b2ShapeId` opaque handle. */
+type ShapeId = unknown;
+
+/** Callback signature for {@link b2World_OverlapAABB}. Return `true` to continue iteration, `false` to stop. */
+type OverlapCallback = (shapeId: ShapeId, context: unknown) => boolean;
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const r = raw as any;
 
@@ -71,6 +99,21 @@ export const b2CreateBody: (worldId: WorldId, def: BodyDef) => BodyId = r.b2Crea
 export const b2DestroyBody: (bodyId: BodyId) => void = r.b2DestroyBody;
 export const b2Body_GetShapeCount: (bodyId: BodyId) => number = r.b2Body_GetShapeCount;
 export const b2Body_IsValid: (bodyId: BodyId) => boolean = r.b2Body_IsValid;
+export const b2Body_GetType: (bodyId: BodyId) => number = r.b2Body_GetType;
+export const b2Body_GetTransform: (bodyId: BodyId) => Transform = r.b2Body_GetTransform;
+export const b2Body_SetTransform: (
+    bodyId: BodyId,
+    position: Vec2,
+    rotation: Rotation,
+) => void = r.b2Body_SetTransform;
+export const b2Body_GetLinearVelocity: (bodyId: BodyId) => Vec2 = r.b2Body_GetLinearVelocity;
+export const b2Body_SetLinearVelocity: (bodyId: BodyId, v: Vec2) => void =
+    r.b2Body_SetLinearVelocity;
+export const b2Body_GetAngularVelocity: (bodyId: BodyId) => number = r.b2Body_GetAngularVelocity;
+export const b2Body_SetAngularVelocity: (bodyId: BodyId, w: number) => void =
+    r.b2Body_SetAngularVelocity;
+export const b2Body_IsAwake: (bodyId: BodyId) => boolean = r.b2Body_IsAwake;
+export const b2Body_SetAwake: (bodyId: BodyId, awake: boolean) => void = r.b2Body_SetAwake;
 
 export const b2DefaultChainDef: () => ChainDef = r.b2DefaultChainDef;
 export const b2CreateChain: (bodyId: BodyId, def: ChainDef) => ChainId = r.b2CreateChain;
@@ -86,4 +129,28 @@ export const b2CreatePolygonShape: (
 export const b2ComputeHull: (points: Vec2[], count: number) => unknown = r.b2ComputeHull;
 export const b2MakePolygon: (hull: unknown, radius: number) => unknown = r.b2MakePolygon;
 
-export type { Vec2, BodyDef, ChainDef, ShapeDef };
+/** AABB constructor: `new b2AABB(lowerX, lowerY, upperX, upperY)`. */
+export const b2AABB: new (lx: number, ly: number, ux: number, uy: number) => AABB = r.b2AABB;
+export const b2DefaultQueryFilter: () => QueryFilter = r.b2DefaultQueryFilter;
+
+/**
+ * Iterates every shape whose AABB overlaps the query AABB. The callback
+ * receives a `b2ShapeId` and the user `context`; return `true` to keep
+ * iterating, `false` to stop early.
+ *
+ * Note: `phaser-box2d` 1.1's implementation queries all body-type trees
+ * (static + kinematic + dynamic) without filtering by body type — the
+ * caller has to filter via {@link b2Body_GetType} on the resulting
+ * shapes' bodies.
+ */
+export const b2World_OverlapAABB: (
+    worldId: WorldId,
+    aabb: AABB,
+    filter: QueryFilter,
+    fcn: OverlapCallback,
+    context: unknown,
+) => void = r.b2World_OverlapAABB;
+
+export const b2Shape_GetBody: (shapeId: ShapeId) => BodyId = r.b2Shape_GetBody;
+
+export type { Vec2, BodyDef, ChainDef, ShapeDef, AABB, QueryFilter, Rotation, Transform, ShapeId };

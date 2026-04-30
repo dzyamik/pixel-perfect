@@ -141,6 +141,22 @@ export class DeferredRebuildQueue {
         adapter: Box2DAdapter,
         onChunkRebuilt?: (chunk: Chunk) => void,
     ): void {
+        // Snapshot every dynamic body whose AABB overlaps the terrain
+        // before any static-body churn. The terrain rebuild will destroy
+        // each chunk's static body, which destroys every contact bound
+        // to that body's shapes and wakes the contacting dynamic bodies.
+        // Restoring (transform, velocity, awake) after the rebuild
+        // returns sleeping bodies to sleep and preserves the kinematic
+        // state of awake ones — eliminating the per-frame "wake + free
+        // fall + bounce" cycle that would otherwise show up as visible
+        // jitter and could drift bodies into carved-out holes.
+        const snapshots = adapter.snapshotDynamicBodies({
+            minX: 0,
+            minY: 0,
+            maxX: this.bitmap.width,
+            maxY: this.bitmap.height,
+        });
+
         // Identify every connected solid component in the bitmap, extract
         // its closed contours, and route each component to a deterministic
         // representative chunk (the chunk containing its lex-smallest
@@ -216,6 +232,15 @@ export class DeferredRebuildQueue {
             this.bitmap.clearDirty(chunk);
         }
         this.dirtyChunks.clear();
+
+        // Now that all destroyed-and-recreated terrain bodies are back
+        // in place, write the dynamic-body kinematic state we captured
+        // pre-rebuild back onto each body. This undoes the wake-up and
+        // any shape-destroy side effects, leaving every body exactly
+        // where it was before the rebuild. The next world step will
+        // re-resolve any tiny remaining penetration against the new
+        // polygon set without a free-fall window.
+        adapter.restoreDynamicBodies(snapshots);
     }
 }
 

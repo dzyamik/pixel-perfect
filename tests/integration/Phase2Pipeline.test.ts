@@ -15,19 +15,27 @@
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { Carve, ChunkedBitmap, Deposit } from '../../src/core/index.js';
-import type { Material } from '../../src/core/index.js';
+import type { Contour, Material } from '../../src/core/index.js';
 import {
     Box2DAdapter,
     DebrisDetector,
     DeferredRebuildQueue,
 } from '../../src/physics/index.js';
 import {
+    b2Body_GetAngularVelocity,
+    b2Body_GetLinearVelocity,
     b2Body_GetShapeCount,
+    b2Body_GetTransform,
+    b2Body_IsAwake,
     b2Body_IsValid,
+    b2Body_SetAngularVelocity,
+    b2Body_SetAwake,
+    b2Body_SetLinearVelocity,
     b2CreateWorld,
     b2CreateWorldArray,
     b2DefaultWorldDef,
     b2DestroyWorld,
+    b2Vec2,
 } from '../../src/physics/box2d.js';
 import type { BodyId, WorldId } from '../../src/physics/index.js';
 
@@ -216,6 +224,104 @@ describe('Phase 2.5 pipeline — cross-chunk blob support', () => {
         } finally {
             bigAdapter.dispose();
         }
+    });
+});
+
+describe('Phase 2 pipeline — snapshot/restore across rebuild', () => {
+    /**
+     * Helper: set up a small rest-on-ground scene and return the
+     * dynamic body id for a debris piece. The terrain has a
+     * 64-px-wide ground band along the bottom; the body sits well
+     * above it (no contact) so the rebuild won't try to resolve a
+     * pre-existing penetration that complicates the assertion.
+     */
+    function setUpSceneWithDynamicBody(): BodyId {
+        for (let x = 0; x < 64; x++) for (let y = 60; y < 64; y++) bitmap.setPixel(x, y, 1);
+        flushAll();
+        const square: Contour = {
+            points: [
+                { x: 28, y: 30 },
+                { x: 36, y: 30 },
+                { x: 36, y: 38 },
+                { x: 28, y: 38 },
+            ],
+            closed: true,
+        };
+        const bodyId = adapter.createDebrisBody(square, dirt);
+        if (bodyId === null) throw new Error('failed to create debris body');
+        return bodyId;
+    }
+
+    it('preserves a dynamic body\'s transform across a terrain rebuild', () => {
+        const bodyId = setUpSceneWithDynamicBody();
+
+        const before = b2Body_GetTransform(bodyId);
+        const px = before.p.x;
+        const py = before.p.y;
+        const rc = before.q.c;
+        const rs = before.q.s;
+
+        // Carve elsewhere on the terrain so the rebuild fires.
+        Carve.circle(bitmap, 10, 62, 2);
+        flushAll();
+
+        const after = b2Body_GetTransform(bodyId);
+        expect(after.p.x).toBeCloseTo(px, 9);
+        expect(after.p.y).toBeCloseTo(py, 9);
+        expect(after.q.c).toBeCloseTo(rc, 9);
+        expect(after.q.s).toBeCloseTo(rs, 9);
+    });
+
+    it('preserves linear and angular velocity across a rebuild', () => {
+        const bodyId = setUpSceneWithDynamicBody();
+        b2Body_SetLinearVelocity(bodyId, new b2Vec2(1.5, -0.7));
+        b2Body_SetAngularVelocity(bodyId, 2.3);
+
+        Carve.circle(bitmap, 10, 62, 2);
+        flushAll();
+
+        const v = b2Body_GetLinearVelocity(bodyId);
+        const w = b2Body_GetAngularVelocity(bodyId);
+        expect(v.x).toBeCloseTo(1.5, 9);
+        expect(v.y).toBeCloseTo(-0.7, 9);
+        expect(w).toBeCloseTo(2.3, 9);
+    });
+
+    it('keeps a sleeping body asleep through a rebuild that would have woken it', () => {
+        const bodyId = setUpSceneWithDynamicBody();
+        // Put the body to sleep explicitly. Without snapshot/restore the
+        // shape-destroy in the rebuild would wake it (PhaserBox2D.js:3173
+        // forces wakeBodies = true).
+        b2Body_SetAwake(bodyId, false);
+        expect(b2Body_IsAwake(bodyId)).toBe(false);
+
+        Carve.circle(bitmap, 10, 62, 2);
+        flushAll();
+
+        expect(b2Body_IsAwake(bodyId)).toBe(false);
+    });
+
+    it('does not affect static (chunk) bodies', () => {
+        // Sanity: snapshot/restore must filter to dynamic bodies.
+        // Otherwise we'd be writing transforms back onto our own
+        // newly-recreated terrain bodies, which would corrupt them.
+        Deposit.circle(bitmap, 32, 32, 20, 1);
+        flushAll();
+        const chunkBody = adapter.getChunkBody(bitmap.getChunk(0, 0));
+        expect(chunkBody).not.toBeNull();
+        expect(b2Body_IsValid(chunkBody!)).toBe(true);
+
+        Carve.circle(bitmap, 32, 32, 4);
+        flushAll();
+
+        // The chunk's body was destroyed and recreated by the rebuild.
+        // The OLD handle should be invalid; the NEW handle valid.
+        // (If snapshot/restore included static bodies, we'd have crashed
+        // trying to set the old freed transform.)
+        expect(b2Body_IsValid(chunkBody!)).toBe(false);
+        const newBody = adapter.getChunkBody(bitmap.getChunk(0, 0));
+        expect(newBody).not.toBeNull();
+        expect(b2Body_IsValid(newBody!)).toBe(true);
     });
 });
 
