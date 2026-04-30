@@ -330,6 +330,51 @@ describe('CellularAutomaton.step', () => {
         }
     });
 
+    it('a tall water column poured onto a flat floor levels into a single row', () => {
+        // Regression for the "water behaves like sand" bug. With
+        // per-tick uniform L/R preference, a contiguous water column
+        // shifts as a block instead of spreading. Per-cell preference
+        // (x parity XOR tick parity) makes adjacent cells try opposite
+        // directions, so the column flattens into a single horizontal
+        // row over enough ticks.
+        //
+        // 9-wide bitmap, 6-tall column poured into the center, stone
+        // floor at the bottom row. After ~50 ticks the column should
+        // have entirely flattened — every water cell on the floor row,
+        // no taller-than-1 stack anywhere.
+        const W = 9;
+        const H = 8;
+        const bm = new ChunkedBitmap({
+            width: W,
+            height: H,
+            chunkSize: 1,
+            materials: [sand, stone, water],
+        });
+        // Stone floor at y=H-1.
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        // 6-tall water column centered at x=4.
+        for (let y = 0; y < 6; y++) bm.setPixel(4, y, water.id);
+
+        for (let t = 0; t < 50; t++) CellularAutomaton.step(bm, t);
+
+        // Count water and verify all 6 cells are on the floor row.
+        let waterCount = 0;
+        let onFloor = 0;
+        let aboveFloor = 0;
+        for (let y = 0; y < H; y++) {
+            for (let x = 0; x < W; x++) {
+                if (bm.getPixel(x, y) === water.id) {
+                    waterCount++;
+                    if (y === H - 2) onFloor++;
+                    else aboveFloor++;
+                }
+            }
+        }
+        expect(waterCount).toBe(6);
+        expect(onFloor).toBe(6);
+        expect(aboveFloor).toBe(0);
+    });
+
     it('water fills a U-shaped container from the bottom up', () => {
         const bm = gridBitmap([
             'w....',

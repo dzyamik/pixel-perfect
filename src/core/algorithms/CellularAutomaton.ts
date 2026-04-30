@@ -55,6 +55,12 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
     const H = bitmap.height;
     const goRight = (tick & 1) === 0;
     const materials = bitmap.materials;
+    // Cells that received fluid via horizontal flow this tick. Used
+    // by the outer loop to skip re-processing — a water cell that
+    // just slid sideways shouldn't be picked up again as the loop
+    // continues to that x. Sand never moves to the same row, so it
+    // never enters this set; the cost is a no-op for sand-only worlds.
+    const movedThisTick = new Set<number>();
 
     // Bottom-up so material falling from row y can't be re-processed
     // in row y+1 within the same tick.
@@ -63,6 +69,8 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
         const xEnd = goRight ? W : -1;
         const dx = goRight ? 1 : -1;
         for (let x = xStart; x !== xEnd; x += dx) {
+            if (movedThisTick.has(y * W + x)) continue;
+
             const id = bitmap.getPixel(x, y);
             if (id === 0) continue;
             const material = materials.get(id);
@@ -73,7 +81,7 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
             if (kind === 'sand') {
                 stepSand(bitmap, materials, x, y, id, W, H, goRight);
             } else if (kind === 'water') {
-                stepWater(bitmap, materials, x, y, id, W, H, goRight);
+                stepWater(bitmap, materials, x, y, id, W, H, goRight, movedThisTick);
             }
         }
     }
@@ -171,6 +179,21 @@ function maybeSettle(
  * Water step: fall straight down → diagonal-down → horizontal spread.
  * All targets must be pure air (water doesn't displace sand or other
  * water).
+ *
+ * Side preference is **per-cell** rather than per-tick. A cell at
+ * column `x` prefers right when `goRight === (x is even)`, otherwise
+ * left — which means adjacent cells in the same row try opposite
+ * directions in a single tick. Without this asymmetry, a contiguous
+ * block of water under uniform per-tick preference shifts en masse
+ * instead of spreading, and the visual is "water piles like sand
+ * even though it should level off." Pools level after enough ticks.
+ *
+ * Horizontal moves register the destination in `movedThisTick` so
+ * the outer scan doesn't re-process the just-placed cell as the
+ * loop continues. Without this guard, a right-preferring scan that
+ * encounters water at x=2 and moves it to x=3 would then process
+ * x=3 (now water) and move it to x=4 — water "tunnels" along the
+ * scan direction in a single tick instead of spreading by 1.
  */
 function stepWater(
     bitmap: ChunkedBitmap,
@@ -181,6 +204,7 @@ function stepWater(
     W: number,
     H: number,
     goRight: boolean,
+    movedThisTick: Set<number>,
 ): void {
     // Fall straight down.
     if (y + 1 < H && bitmap.getPixel(x, y + 1) === 0) {
@@ -189,9 +213,14 @@ function stepWater(
         return;
     }
 
-    const sides = goRight ? [-1, 1] : [1, -1];
+    // Per-cell L/R preference: combine scan-tick parity with x-cell
+    // parity so adjacent cells in a row try opposite sides each tick.
+    const xEven = (x & 1) === 0;
+    const preferRight = goRight === xEven;
+    const sides = preferRight ? [1, -1] : [-1, 1];
 
-    // Diagonal-down.
+    // Diagonal-down. Targets in row y+1 (already-processed) so no
+    // moved-set tracking needed.
     if (y + 1 < H) {
         for (const sx of sides) {
             const nx = x + sx;
@@ -214,6 +243,9 @@ function stepWater(
         if (bitmap.getPixel(nx, y) === 0) {
             bitmap.setPixel(nx, y, id);
             bitmap.setPixel(x, y, 0);
+            // Same row — guard against re-processing as the outer
+            // loop reaches the destination column.
+            movedThisTick.add(y * W + nx);
             return;
         }
     }
