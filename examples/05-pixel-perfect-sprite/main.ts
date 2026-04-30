@@ -61,13 +61,17 @@ class PixelSpriteScene extends Phaser.Scene {
         this.targetSprite = this.pixelPerfect.sprite(540, 160, 'mask-ring');
 
         // Build a small destructible-terrain patch in the bottom area
-        // so we can show sprite-vs-terrain collision too.
+        // so we can show sprite-vs-terrain collision too. Width and
+        // height must both be multiples of chunkSize.
+        const TERRAIN_W = 256;
+        const TERRAIN_H = 128;
+        const TERRAIN_CHUNK = 64;
         this.terrain = this.pixelPerfect.terrain({
-            width: 256,
-            height: 96,
-            chunkSize: 64,
+            width: TERRAIN_W,
+            height: TERRAIN_H,
+            chunkSize: TERRAIN_CHUNK,
             x: 32,
-            y: 240,
+            y: 220,
             materials: [
                 {
                     id: 1,
@@ -81,13 +85,13 @@ class PixelSpriteScene extends Phaser.Scene {
                 },
             ],
         });
-        // Fill the terrain with a wavy surface so the sprite-vs-terrain
-        // test has interesting geometry. (Top of the terrain at varying
-        // y; bottom is solid rock.)
+        // Wavy top surface; everything below the surface line is solid
+        // rock. The sprite-vs-terrain overlap fires when the dragged
+        // sprite's solid pixels cross the surface.
         const bm = this.terrain.bitmap;
-        for (let x = 0; x < 256; x++) {
-            const surfaceY = Math.floor(40 + Math.sin((x / 256) * Math.PI * 3) * 16);
-            for (let y = surfaceY; y < 96; y++) bm.setPixel(x, y, 1);
+        for (let x = 0; x < TERRAIN_W; x++) {
+            const surfaceY = Math.floor(60 + Math.sin((x / TERRAIN_W) * Math.PI * 3) * 16);
+            for (let y = surfaceY; y < TERRAIN_H; y++) bm.setPixel(x, y, 1);
         }
 
         // Draggable sprite — the user moves this one.
