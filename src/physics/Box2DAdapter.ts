@@ -15,6 +15,7 @@ import {
     b2DefaultBodyDef,
     b2DefaultQueryFilter,
     b2DestroyBody,
+    b2Rot,
     b2Shape_GetBody,
     b2Vec2,
     b2World_OverlapAABB,
@@ -352,10 +353,17 @@ export class Box2DAdapter {
             // — but the `phaser-box2d` 1.1 setters throw if the index is
             // freed, so we need to rely on the queue not snapshotting
             // bodies the user is destroying inside the same flush.
+            //
+            // The rotation MUST be a real `b2Rot` instance, not a plain
+            // `{ c, s }` literal. `b2Body_SetTransform` writes the object
+            // straight into `bodySim.transform.q` and `bodySim.rotation0`
+            // (PhaserBox2D.js:10723, 10726), and the next `b2World_Step`
+            // calls `.clone()` on it via `b2BodySim.copyTo`. A plain
+            // literal has no `clone()` and crashes the step.
             b2Body_SetTransform(
                 s.bodyId,
                 new b2Vec2(s.px, s.py),
-                { c: s.rc, s: s.rs },
+                new b2Rot(s.rc, s.rs),
             );
             b2Body_SetLinearVelocity(s.bodyId, new b2Vec2(s.vx, s.vy));
             b2Body_SetAngularVelocity(s.bodyId, s.omega);

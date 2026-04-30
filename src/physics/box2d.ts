@@ -82,6 +82,19 @@ const r = raw as any;
 /** Shared b2Vec2 constructor. Construct with `new b2Vec2(x, y)`. */
 export const b2Vec2: new (x: number, y: number) => Vec2 = r.b2Vec2;
 
+/**
+ * `b2Rot` constructor. Construct with `new b2Rot(c, s)` where
+ * `c = Math.cos(angle)` and `s = Math.sin(angle)`. Default
+ * `(c=1, s=0)` is the identity rotation.
+ *
+ * IMPORTANT: pass a real `b2Rot` instance (not a `{ c, s }` literal)
+ * to `b2Body_SetTransform`. The setter writes the object straight
+ * into `bodySim.transform.q` and `bodySim.rotation0`; the next world
+ * step calls `.clone()` on it via `b2BodySim.copyTo`, and a plain
+ * literal would crash with "this.q.clone is not a function".
+ */
+export const b2Rot: new (c?: number, s?: number) => Rotation = r.b2Rot;
+
 /** b2BodyType enum: `.b2_staticBody`, `.b2_dynamicBody`, etc. */
 export const b2BodyType: BodyTypeEnum = r.b2BodyType;
 

@@ -36,6 +36,7 @@ import {
     b2DefaultWorldDef,
     b2DestroyWorld,
     b2Vec2,
+    b2World_Step,
 } from '../../src/physics/box2d.js';
 import type { BodyId, WorldId } from '../../src/physics/index.js';
 
@@ -299,6 +300,26 @@ describe('Phase 2 pipeline — snapshot/restore across rebuild', () => {
         flushAll();
 
         expect(b2Body_IsAwake(bodyId)).toBe(false);
+    });
+
+    it('a world step after restore does not crash on the restored rotation', () => {
+        // Regression for a real bug seen in demos 03 and 04: passing a
+        // plain `{ c, s }` literal to b2Body_SetTransform stuck a
+        // clone()-less object into bodySim.transform.q and
+        // bodySim.rotation0 (PhaserBox2D.js:10723, 10726). The next
+        // WorldStep would crash with "this.q.clone is not a function"
+        // inside b2BodySim.copyTo. The fix is to use a real `b2Rot`
+        // instance; this test guards against regressing it by actually
+        // stepping the world after a restore cycle.
+        setUpSceneWithDynamicBody();
+        Carve.circle(bitmap, 10, 62, 2);
+        flushAll();
+
+        // Two steps — the crash was sometimes one step delayed
+        // (b2TrySleepIsland reaches copyTo via the awake-set bookkeeping
+        // path, which isn't always exercised every frame).
+        expect(() => b2World_Step(worldId, 1 / 60, 4)).not.toThrow();
+        expect(() => b2World_Step(worldId, 1 / 60, 4)).not.toThrow();
     });
 
     it('does not affect static (chunk) bodies', () => {

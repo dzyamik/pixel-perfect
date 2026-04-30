@@ -18,7 +18,7 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | 4 — examples | (interleaved with Phase 3) | — |
 | 5 — docs & polish | not started | — |
 
-Test suite: 210 tests across 17 files, ~1.5 s. typecheck and lint clean.
+Test suite: 211 tests across 17 files, ~1.4 s. typecheck and lint clean.
 
 ---
 
@@ -108,16 +108,34 @@ real change worth knowing.
 ### Files involved
 
 - `src/physics/box2d.ts` — extended typed binding with `b2AABB`,
-  `b2DefaultQueryFilter`, `b2World_OverlapAABB`, `b2Shape_GetBody`,
-  `b2Body_GetType`, transform/velocity/awake getters and setters.
+  `b2Rot` constructor, `b2DefaultQueryFilter`,
+  `b2World_OverlapAABB`, `b2Shape_GetBody`, `b2Body_GetType`,
+  transform/velocity/awake getters and setters.
 - `src/physics/Box2DAdapter.ts` — new `BodySnapshot`,
   `snapshotDynamicBodies`, `restoreDynamicBodies`.
 - `src/physics/DeferredRebuildQueue.ts` — wraps the `rebuildTerrain`
   body-churn loop with snapshot/restore.
 - `tests/integration/Phase2Pipeline.test.ts` — new
   "snapshot/restore across rebuild" describe block: transform
-  preservation, velocity preservation, sleep state preservation, and
-  a sanity check that static (chunk) bodies are excluded.
+  preservation, velocity preservation, sleep state preservation,
+  static-body exclusion, and a `b2World_Step`-after-restore
+  regression test (see "subtle gotcha" below).
+
+### Subtle gotcha — `b2Body_SetTransform` requires a real `b2Rot`
+
+Initial implementation passed a plain `{ c, s }` object literal as
+the rotation argument. Tests passed (they never stepped the world);
+the demos crashed on the first frame after a carve with
+`TypeError: this.q.clone is not a function` deep inside
+`b2BodySim.copyTo`. Source-read at PhaserBox2D.js:10723–10726
+shows `b2Body_SetTransform` *aliases* the passed object into
+`bodySim.transform.q` and `bodySim.rotation0`; the next
+`b2World_Step` calls `.clone()` on it via `b2BodySim.copyTo`, and a
+clone-less plain object crashes the step.
+
+Fix: expose `b2Rot` from `box2d.ts` and pass `new b2Rot(rc, rs)`.
+The integration test now does a `b2World_Step` after restore so
+this regression is caught at the test layer next time.
 
 ### Visual verification
 
