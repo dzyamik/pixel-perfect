@@ -26,13 +26,19 @@ export interface Point {
  * - `'static'` — the material doesn't move on its own. The bitmap state is
  *   only changed by `Carve` / `Deposit` operations or by debris detection.
  *   This is the default for back-compat with v1.x material definitions.
- * - `'sand'` — the material falls under gravity each simulation tick.
- *   Sand cells try to move straight down; if blocked, they slide
- *   diagonally to either side. Only `'static'` materials generate Box2D
- *   colliders, so simulating sand doesn't trigger per-frame physics
- *   rebuilds.
+ * - `'sand'` — granular fluid. Falls straight down when blocked, slides
+ *   diagonally otherwise. Sinks through `'water'` (density swap on
+ *   straight-down moves only). Doesn't move horizontally.
+ * - `'water'` — liquid. Falls straight down when blocked, slides
+ *   diagonally otherwise; if both fail, spreads horizontally so a
+ *   pool levels off over many ticks. Less dense than sand — water
+ *   is displaced by falling sand but cannot move into sand cells.
+ *
+ * Only `'static'` materials generate Box2D colliders. Simulating
+ * fluid materials therefore doesn't trigger per-frame physics
+ * rebuilds.
  */
-export type SimulationKind = 'static' | 'sand';
+export type SimulationKind = 'static' | 'sand' | 'water';
 
 /**
  * Description of a material that can occupy a bitmap cell.

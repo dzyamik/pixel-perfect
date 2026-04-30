@@ -19,8 +19,9 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | 5 — docs & polish | ✅ done | `v1.0.0` |
 | v1.x — sprite transforms + jitter fix | ✅ done | `v1.1.0` |
 | v2 — falling-sand cellular automaton | ✅ initial release | `v2.0.0` |
+| v2.x — water + density swap | ✅ done | `v2.1.0` |
 
-Test suite: 264 tests across 20 files, ~2.2 s. typecheck and lint clean.
+Test suite: 270 tests across 20 files, ~2.1 s. typecheck and lint clean.
 
 The library now has its public Phaser entry point: register
 `PixelPerfectPlugin` once at game creation (mapping `'pixelPerfect'`)

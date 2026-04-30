@@ -4,7 +4,7 @@
 
 ![pixel-perfect — destructible terrain demo](media/hero.gif)
 
-**Status:** `v2.0.0` — stable public surface, with cellular-automaton fluid simulation. Local development only (not on npm yet).
+**Status:** `v2.1.0` — stable public surface, with cellular-automaton fluid simulation (sand + water). Local development only (not on npm yet).
 
 ## What this is
 
@@ -35,7 +35,7 @@ The `examples/` folder is built into `docs/` and committed; run them locally wit
 | 06 — worms-style | walking circle + grenades that carve and detach cliff slabs |
 | 07 — image-based terrain | stamp a PNG / canvas alpha mask onto the bitmap, then carve |
 | 08 — sprite playground | upload your own PNG; cyan outline traces the alpha mask |
-| 09 — falling sand | cellular-automaton step; sand falls into a carved-floor funnel |
+| 09 — falling sand + water | cellular-automaton step; sand sinks through water; carve the funnel floor to drain |
 
 ## Quickstart
 

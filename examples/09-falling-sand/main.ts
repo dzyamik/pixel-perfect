@@ -1,35 +1,32 @@
 /**
- * Demo 09 — falling sand.
+ * Demo 09 — falling sand + water.
  *
- * v2.0's headline feature: a cellular-automaton step over the bitmap
- * that moves materials with `simulation: 'sand'` under gravity each
- * tick. Sand cells:
+ * v2's cellular-automaton step in action. Two fluid kinds coexist:
  *
- *   - Fall straight down when the cell below is air.
- *   - Slide diagonally when blocked by a non-air cell, alternating
- *     L/R preference per tick to avoid pile bias.
- *   - Stop when neither below nor diagonal-below is air.
+ *  - **sand** falls straight down or slides diagonally; piles like
+ *    granular media. Sinks through water on straight-down moves
+ *    (density: sand > water).
+ *  - **water** falls down → diagonal-down → spreads horizontally, so
+ *    a pool levels off over many ticks. Less dense than sand: doesn't
+ *    move into sand cells.
  *
- *   left mouse  → spawn sand at the cursor (continuous on drag)
- *   right mouse → carve the static rock terrain
+ *   left mouse  → spawn the active fluid at the cursor (drag)
+ *   right mouse → carve the static stone terrain
  *   wheel       → resize brush
- *   space       → drop a one-shot dump of sand at the top center
- *   R           → reset terrain + clear all sand
+ *   1 / 2       → switch the active fluid (sand / water)
+ *   space       → drop a one-shot patch of the active fluid at the top
+ *   R           → reset terrain + clear all fluid
  *
- * Two materials are registered:
+ * Three materials registered:
  *
- *   - **stone** with `simulation: 'static'` — generates Box2D colliders
- *     and is carved by right-click. Forms the U-shaped funnel and the
- *     overall world floor.
- *   - **sand** with `simulation: 'sand'` — falls under the cellular-
- *     automaton step. Does NOT generate Box2D colliders (the collider
- *     extraction filters to static materials only), so the per-frame
- *     sand motion doesn't trigger physics rebuilds.
+ *  - **stone** (`simulation: 'static'`) — generates Box2D colliders,
+ *    carved by right-click. Forms the U-shaped funnel and the floor.
+ *  - **sand** (`simulation: 'sand'`).
+ *  - **water** (`simulation: 'water'`).
  *
  * `autoSimulate: true` on the terrain config means the plugin's
  * `terrain.update()` runs one sim tick before the renderer/physics
- * flush each frame, so the user just spawns sand and watches it
- * settle without wiring anything else.
+ * flush each frame.
  */
 
 import * as Phaser from 'phaser';
@@ -55,7 +52,6 @@ const STONE: Material = {
 const SAND: Material = {
     id: 2,
     name: 'sand',
-    // Slightly varied tones so the pile reads as "individual grains".
     color: 0xd4b06a,
     density: 1,
     friction: 0.5,
@@ -65,6 +61,18 @@ const SAND: Material = {
     simulation: 'sand',
 };
 
+const WATER: Material = {
+    id: 3,
+    name: 'water',
+    color: 0x4080c0,
+    density: 1,
+    friction: 0,
+    restitution: 0,
+    destructible: true,
+    destructionResistance: 0,
+    simulation: 'water',
+};
+
 class FallingSandScene extends Phaser.Scene {
     private terrain!: DestructibleTerrain;
     private terrainOriginX = 0;
@@ -72,6 +80,7 @@ class FallingSandScene extends Phaser.Scene {
 
     private cursor!: Phaser.GameObjects.Graphics;
     private brushRadius = 3;
+    private activeFluid: Material = SAND;
     private stats!: ReturnType<typeof attachStats>;
 
     constructor() {
@@ -90,7 +99,7 @@ class FallingSandScene extends Phaser.Scene {
             chunkSize: CHUNK_SIZE,
             x: this.terrainOriginX,
             y: this.terrainOriginY,
-            materials: [STONE, SAND],
+            materials: [STONE, SAND, WATER],
             autoSimulate: true,
         });
         this.regenerateTerrain();
@@ -100,9 +109,10 @@ class FallingSandScene extends Phaser.Scene {
         this.input.mouse?.disableContextMenu();
         const action = (pointer: Phaser.Input.Pointer) => {
             if (pointer.leftButtonDown()) {
-                // Spawn sand inside the brush. Only set cells that are
-                // currently air so we don't overwrite stone walls.
-                this.spawnBrushAt(pointer.worldX, pointer.worldY, SAND.id);
+                // Spawn the active fluid inside the brush. Only set
+                // cells currently air so we don't overwrite stone
+                // walls or already-existing fluid.
+                this.spawnBrushAt(pointer.worldX, pointer.worldY, this.activeFluid.id);
             } else if (pointer.rightButtonDown()) {
                 this.terrain.carve.circle(pointer.worldX, pointer.worldY, this.brushRadius);
             }
@@ -110,7 +120,9 @@ class FallingSandScene extends Phaser.Scene {
         this.input.on('pointerdown', action);
         this.input.on('pointermove', (p: Phaser.Input.Pointer) => {
             this.cursor.clear();
-            this.cursor.lineStyle(1, 0xffffff, 0.6);
+            // Tint the brush outline with the active fluid's color so
+            // the user sees what they'd spawn before clicking.
+            this.cursor.lineStyle(1, this.activeFluid.color, 0.85);
             this.cursor.strokeCircle(p.worldX, p.worldY, this.brushRadius);
             action(p);
         });
@@ -129,13 +141,19 @@ class FallingSandScene extends Phaser.Scene {
                 );
             },
         );
-        this.input.keyboard?.on('keydown-SPACE', () => this.dumpSand());
+        this.input.keyboard?.on('keydown-SPACE', () => this.dumpFluid());
         this.input.keyboard?.on('keydown-R', () => this.regenerateTerrain());
+        this.input.keyboard?.on('keydown-ONE', () => {
+            this.activeFluid = SAND;
+        });
+        this.input.keyboard?.on('keydown-TWO', () => {
+            this.activeFluid = WATER;
+        });
 
         this.stats = attachStats(this);
         showHint(
             this,
-            'left = sand · right = carve stone · wheel = brush size · space = sand dump · R = reset',
+            'left = active fluid · right = carve · 1/2 = sand/water · space = dump · R = reset',
             7000,
         );
     }
@@ -144,9 +162,12 @@ class FallingSandScene extends Phaser.Scene {
         // Auto-sim runs in terrain.update() (called by the plugin on
         // POST_UPDATE). Nothing to do here for the simulation; just
         // keep stats fresh.
+        const counts = this.countFluids();
         this.stats.update({
             brush: this.brushRadius,
-            sand: this.countSand(),
+            tool: this.activeFluid.name,
+            sand: counts.sand,
+            water: counts.water,
         });
     }
 
@@ -176,14 +197,15 @@ class FallingSandScene extends Phaser.Scene {
         }
     }
 
-    private dumpSand(): void {
+    private dumpFluid(): void {
         const bm = this.terrain.bitmap;
-        // Drop a 64×8 patch of sand near the top-center.
+        // Drop a 64×8 patch of the active fluid near the top-center.
+        const id = this.activeFluid.id;
         const x0 = Math.floor((WIDTH - 64) / 2);
         const y0 = 4;
         for (let y = y0; y < y0 + 8; y++) {
             for (let x = x0; x < x0 + 64; x++) {
-                if (bm.getPixel(x, y) === 0) bm.setPixel(x, y, SAND.id);
+                if (bm.getPixel(x, y) === 0) bm.setPixel(x, y, id);
             }
         }
     }
@@ -210,19 +232,22 @@ class FallingSandScene extends Phaser.Scene {
         }
     }
 
-    private countSand(): number {
-        // Cheap visual stat — iterate the bitmap each frame and count
-        // sand cells. For larger worlds this would be tracked more
-        // efficiently (e.g. via a deposit/remove counter); the
-        // 512×256 demo bitmap iterates in well under a millisecond.
+    private countFluids(): { sand: number; water: number } {
+        // Cheap visual stat — iterate the bitmap each frame. For
+        // larger worlds this would be tracked via a deposit/remove
+        // counter; the 512×256 demo bitmap iterates in well under a
+        // millisecond.
         const bm = this.terrain.bitmap;
-        let count = 0;
+        let sand = 0;
+        let water = 0;
         for (let y = 0; y < HEIGHT; y++) {
             for (let x = 0; x < WIDTH; x++) {
-                if (bm.getPixel(x, y) === SAND.id) count++;
+                const id = bm.getPixel(x, y);
+                if (id === SAND.id) sand++;
+                else if (id === WATER.id) water++;
             }
         }
-        return count;
+        return { sand, water };
     }
 }
 

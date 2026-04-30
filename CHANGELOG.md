@@ -2,6 +2,49 @@
 
 All notable changes to this project will be documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) loosely; this project does not yet publish to npm.
 
+## [v2.1.0] — 2026-04-30
+
+Water joins sand as a simulated fluid kind. Sand and water coexist
+with a density rule (sand sinks through water on straight-down moves;
+water can't displace sand).
+
+### Added
+
+- `SimulationKind` extended to `'static' | 'sand' | 'water'`.
+- `'water'` cell rules: fall straight down → diagonal-down →
+  spread horizontally. The horizontal-spread rule is what lets a
+  pool of water settle to a level over multiple ticks.
+- Sand-water density swap: a sand cell with water below swaps with
+  the water on its straight-down move. Sand sinks through water
+  columns one row per tick. Diagonals stay air-only — no
+  multi-cell-swap bookkeeping.
+
+### Changed
+
+- `CellularAutomaton.step` refactored from a sand-only inner loop
+  into a per-kind dispatch (`stepSand` / `stepWater`). Same scan
+  order, same bottom-up + L/R alternation invariants.
+
+### Demo 09
+
+`examples/09-falling-sand/` retitled "falling sand + water". `1` and
+`2` keys switch between sand and water as the active fluid; the
+brush outline tints with the active fluid's color so you see what
+you'd spawn before clicking. Stats overlay tracks both counts.
+
+### Tests
+
+6 new cases in `tests/core/algorithms/CellularAutomaton.test.ts`:
+water falls straight down, water spreads horizontally to a flat
+floor (column drains, three water cells at the floor, no leftover
+mid-air water), water fills a U-cup from the bottom up, sand sinks
+through a water column on straight-down moves, water doesn't
+displace sand (less dense), mixed sand-water column settles into
+sand-bottom / water-top after enough ticks. Total suite now 270
+across 20 files; typecheck and lint clean.
+
+---
+
 ## [v2.0.0] — 2026-04-30
 
 The headline v2 feature lands: a cellular-automaton step that

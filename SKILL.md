@@ -16,6 +16,7 @@ Phase progression:
 - ✅ **Phase 5 — docs & polish** (`v1.0.0`): TypeDoc API ref, CONTRIBUTING / CoC / issue templates, hero gif.
 - ✅ **v1.1 — `PixelPerfectSprite` scaling + rotation, jitter fix** (`v1.1.0`): both v1 sprite limitations lifted; the residual sub-pixel jitter on actively-carved chunks closed via force-settle in `Box2DAdapter.restoreDynamicBodies`.
 - ✅ **v2 — cellular-automaton falling sand** (`v2.0.0`): `Material.simulation: 'static' | 'sand'`, `CellularAutomaton.step`, `DestructibleTerrain.simStep` + `autoSimulate` opt-in, demo 09. Static-only collider filtering means per-frame sand motion doesn't trigger physics rebuilds.
+- ✅ **v2.1 — water + density swap** (`v2.1.0`): `SimulationKind` extended with `'water'`. Water falls / slides diagonally / spreads horizontally. Sand sinks through water on straight-down moves; water doesn't displace sand. Demo 09 gained a sand/water tool toggle.
 
 The seven runnable demos are in `examples/`, built into `docs/`:
 
@@ -29,7 +30,7 @@ The seven runnable demos are in `examples/`, built into `docs/`:
 | 06 — worms-style | walking circle + grenades that carve and detach cliff slabs |
 | 07 — image-based terrain | stamp a PNG / canvas alpha mask onto the bitmap, then carve |
 | 08 — sprite playground | upload a PNG, see its alpha mask outlined, scale + rotate the sprite; AABB vs pixel-perfect side-by-side |
-| 09 — falling sand | cellular-automaton step over the bitmap; sand falls into a stone funnel, carve the floor to drain it |
+| 09 — falling sand + water | sand and water under a cellular-automaton step; sand sinks through water; carve the funnel floor to drain |
 
 For current in-flight work and known limitations, see `docs-dev/PROGRESS.md`.
 

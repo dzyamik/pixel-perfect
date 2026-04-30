@@ -27,6 +27,18 @@ const stone: Material = {
     simulation: 'static',
 };
 
+const water: Material = {
+    id: 3,
+    name: 'water',
+    color: 0x4080c0,
+    density: 1,
+    friction: 0,
+    restitution: 0,
+    destructible: true,
+    destructionResistance: 0,
+    simulation: 'water',
+};
+
 /** Build a small bitmap from a row-major grid of single-character cells. */
 function gridBitmap(rows: string[]): ChunkedBitmap {
     const w = rows[0]!.length;
@@ -37,7 +49,7 @@ function gridBitmap(rows: string[]): ChunkedBitmap {
         width: w,
         height: h,
         chunkSize: 1,
-        materials: [sand, stone],
+        materials: [sand, stone, water],
     });
     for (let y = 0; y < h; y++) {
         const row = rows[y]!;
@@ -45,6 +57,7 @@ function gridBitmap(rows: string[]): ChunkedBitmap {
             const ch = row[x];
             if (ch === 's') bm.setPixel(x, y, sand.id);
             else if (ch === '#') bm.setPixel(x, y, stone.id);
+            else if (ch === 'w') bm.setPixel(x, y, water.id);
             // '.' and any other char → air (id 0)
         }
     }
@@ -58,7 +71,14 @@ function renderGrid(bm: ChunkedBitmap): string[] {
         let row = '';
         for (let x = 0; x < bm.width; x++) {
             const id = bm.getPixel(x, y);
-            row += id === sand.id ? 's' : id === stone.id ? '#' : '.';
+            row +=
+                id === sand.id
+                    ? 's'
+                    : id === stone.id
+                      ? '#'
+                      : id === water.id
+                        ? 'w'
+                        : '.';
         }
         out.push(row);
     }
@@ -264,6 +284,148 @@ describe('CellularAutomaton.step', () => {
             's#.',
             '...',
         ]);
+    });
+
+    it('water falls straight down when the cell below is air', () => {
+        const bm = gridBitmap([
+            'w....',
+            '.....',
+            '.....',
+            '#####',
+        ]);
+        CellularAutomaton.step(bm, 0);
+        expect(renderGrid(bm)).toEqual([
+            '.....',
+            'w....',
+            '.....',
+            '#####',
+        ]);
+    });
+
+    it('water spreads horizontally on a flat floor over many ticks', () => {
+        // Five-wide flat floor, water column dropped at the center.
+        const bm = gridBitmap([
+            '..w..',
+            '..w..',
+            '..w..',
+            '#####',
+        ]);
+        // Run enough ticks that the column has fully flattened. The
+        // alternation kicks in every tick, so the spread is symmetric
+        // over even-tick counts.
+        for (let t = 0; t < 16; t++) CellularAutomaton.step(bm, t);
+        // Three water cells should now be sitting on the floor (row 2)
+        // and any leftover columns above are air. Total water count
+        // preserved.
+        let waterCount = 0;
+        for (let y = 0; y < bm.height; y++) {
+            for (let x = 0; x < bm.width; x++) {
+                if (bm.getPixel(x, y) === water.id) waterCount++;
+            }
+        }
+        expect(waterCount).toBe(3);
+        // No water in row 0 (top — column should have drained).
+        for (let x = 0; x < bm.width; x++) {
+            expect(bm.getPixel(x, 0)).toBe(0);
+        }
+    });
+
+    it('water fills a U-shaped container from the bottom up', () => {
+        const bm = gridBitmap([
+            'w....',
+            '#...#',
+            '#...#',
+            '#####',
+        ]);
+        for (let t = 0; t < 30; t++) CellularAutomaton.step(bm, t);
+        // The single water cell should have settled somewhere in the
+        // bottom row of the cup (row 2). The first row is the lid we
+        // dropped through; the last row is the floor.
+        let waterCount = 0;
+        let bottomCount = 0;
+        for (let y = 0; y < bm.height; y++) {
+            for (let x = 0; x < bm.width; x++) {
+                if (bm.getPixel(x, y) === water.id) {
+                    waterCount++;
+                    if (y === 2) bottomCount++;
+                }
+            }
+        }
+        expect(waterCount).toBe(1);
+        expect(bottomCount).toBe(1);
+    });
+
+    it('sand sinks through a water column on straight-down moves', () => {
+        const bm = gridBitmap([
+            's',
+            'w',
+            'w',
+            '#',
+        ]);
+        // After one tick: sand swaps with water below (straight-down).
+        CellularAutomaton.step(bm, 0);
+        expect(renderGrid(bm)).toEqual([
+            'w',
+            's',
+            'w',
+            '#',
+        ]);
+        // Second tick: sand swaps with water again.
+        CellularAutomaton.step(bm, 1);
+        expect(renderGrid(bm)).toEqual([
+            'w',
+            'w',
+            's',
+            '#',
+        ]);
+    });
+
+    it('water does not displace sand (less dense)', () => {
+        // Water above sand on a stone floor. Water can't fall into
+        // the sand cell; it stays put.
+        const bm = gridBitmap([
+            'w',
+            's',
+            '#',
+        ]);
+        CellularAutomaton.step(bm, 0);
+        expect(renderGrid(bm)).toEqual([
+            'w',
+            's',
+            '#',
+        ]);
+    });
+
+    it('mixed pile: sand sinks to bottom, water rises to top', () => {
+        // Vertical column alternating sand and water. After enough
+        // ticks, all sand should be at the bottom and water above.
+        const bm = gridBitmap([
+            's',
+            'w',
+            's',
+            'w',
+            '#',
+        ]);
+        // Several ticks for sand to settle past water.
+        for (let t = 0; t < 8; t++) CellularAutomaton.step(bm, t);
+        // Counts preserved.
+        let sandCount = 0;
+        let waterCount = 0;
+        for (let y = 0; y < bm.height; y++) {
+            for (let x = 0; x < bm.width; x++) {
+                const id = bm.getPixel(x, y);
+                if (id === sand.id) sandCount++;
+                else if (id === water.id) waterCount++;
+            }
+        }
+        expect(sandCount).toBe(2);
+        expect(waterCount).toBe(2);
+        // Sand should be at rows 2 and 3 (above the stone floor at
+        // row 4); water should be at rows 0 and 1.
+        expect(bm.getPixel(0, 0)).toBe(water.id);
+        expect(bm.getPixel(0, 1)).toBe(water.id);
+        expect(bm.getPixel(0, 2)).toBe(sand.id);
+        expect(bm.getPixel(0, 3)).toBe(sand.id);
     });
 
     it('unknown / unset simulation kind defaults to static (back-compat)', () => {
