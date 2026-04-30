@@ -127,6 +127,7 @@ export const b2Body_SetAngularVelocity: (bodyId: BodyId, w: number) => void =
     r.b2Body_SetAngularVelocity;
 export const b2Body_IsAwake: (bodyId: BodyId) => boolean = r.b2Body_IsAwake;
 export const b2Body_SetAwake: (bodyId: BodyId, awake: boolean) => void = r.b2Body_SetAwake;
+export const b2Body_ComputeAABB: (bodyId: BodyId) => AABB = r.b2Body_ComputeAABB;
 
 export const b2DefaultChainDef: () => ChainDef = r.b2DefaultChainDef;
 export const b2CreateChain: (bodyId: BodyId, def: ChainDef) => ChainId = r.b2CreateChain;

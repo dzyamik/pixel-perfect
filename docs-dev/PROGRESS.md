@@ -18,7 +18,7 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | 4 — examples | (interleaved with Phase 3) | — |
 | 5 — docs & polish | not started | — |
 
-Test suite: 211 tests across 17 files, ~1.4 s. typecheck and lint clean.
+Test suite: 212 tests across 17 files, ~1.5 s. typecheck and lint clean.
 
 Collider model: **per-chunk** (one static body per chunk that has solid
 pixels). Each chunk's solid mass is independently triangulated via
@@ -49,6 +49,62 @@ the per-blob global rebuild is no longer required.
 | 04 — falling debris | DebrisDetector + dynamic bodies, floating brick falls on load | ✅ tunneling + L-shape fix landed 2026-04-30 (pending visual confirm) |
 
 Build / deploy: `npm run build` writes the demo bundle into `docs/` (committed). No CI; rebuild and commit when changing demos. `vite.config.ts` uses `base: './'` so the build works at any URL prefix.
+
+---
+
+## RESOLVED (2026-04-30): ghost-float when carving directly under a settled body
+
+Follow-up to the snapshot/restore work. The original implementation
+unconditionally restored `awake = false` on bodies that were sleeping
+pre-rebuild. That was correct as long as the body still had support
+after the rebuild — but if the user carved *directly under* a settled
+body, that body's support polygon was gone yet `awake = false` made
+the next world step skip the body entirely. The body would hang
+suspended in midair until something disturbed it. Visible as
+"elements just hang in 1 place even without ground" in demo 04 user
+testing.
+
+### Fix
+
+`Box2DAdapter.restoreDynamicBodies` now detects whether each body
+still has static support before re-sleeping it:
+
+```
+desiredAwake = preRebuildAwake || !hasStaticUnderAABB(body)
+```
+
+`hasStaticUnderAABB` runs a `b2World_OverlapAABB` query on the
+body's exact computed AABB (via `b2Body_ComputeAABB`) and returns
+`true` if any static shape's AABB intersects. Triangle polygons are
+small and per-chunk, so a polygon directly under the body has its
+AABB touching the body's AABB; a body whose support was carved out
+has the nearest static at least one carve radius away.
+
+Bodies that were awake pre-rebuild stay awake (regardless of support
+detection). Bodies that were asleep go back to sleep only if support
+exists; otherwise they're left awake so the next step's gravity
+integration drops them naturally.
+
+### Files involved
+
+- `src/physics/box2d.ts` — exposed `b2Body_ComputeAABB`.
+- `src/physics/Box2DAdapter.ts` — new private
+  `hasStaticUnderAABB(bodyId)`; `restoreDynamicBodies` gates the
+  awake restore on it.
+- `tests/integration/Phase2Pipeline.test.ts` — updated the
+  "stays-asleep" test to actually rest the body on terrain (the old
+  test had the body in midair, which only stayed asleep due to the
+  bug); new "wakes a body whose support was carved out (no
+  ghost-float)" regression carves a hole directly under a sleeping
+  body and asserts both `IsAwake = true` and that subsequent world
+  steps move the body downward.
+
+### Visual verification
+
+User confirmation pending. To verify: in demo 04, settle the brick
+on the ground, then carve directly under it — the brick must fall.
+In demo 03, settled balls remain settled when carving away from
+them; carving directly under a settled ball drops it into the hole.
 
 ---
 

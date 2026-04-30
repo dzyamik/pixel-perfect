@@ -305,18 +305,76 @@ describe('Phase 2 pipeline — snapshot/restore across rebuild', () => {
         expect(w).toBeCloseTo(2.3, 9);
     });
 
-    it('keeps a sleeping body asleep through a rebuild that would have woken it', () => {
-        const bodyId = setUpSceneWithDynamicBody();
-        // Put the body to sleep explicitly. Without snapshot/restore the
-        // shape-destroy in the rebuild would wake it (PhaserBox2D.js:3173
-        // forces wakeBodies = true).
+    it('keeps a sleeping body asleep when it still has support after the rebuild', () => {
+        // Set up: solid ground with a body resting on top of it (its
+        // AABB touches the ground's AABB). The user carves the LEFT
+        // edge of the chunk — far from the body — so the body's
+        // support polygon is preserved across the rebuild.
+        for (let x = 0; x < 64; x++) for (let y = 56; y < 64; y++) bitmap.setPixel(x, y, 1);
+        flushAll();
+        // Body footprint: 8x8 square, bottom edge at y=56 (on top of
+        // the ground band whose top is also at y=56).
+        const restingSquare: Contour = {
+            points: [
+                { x: 28, y: 48 },
+                { x: 36, y: 48 },
+                { x: 36, y: 56 },
+                { x: 28, y: 56 },
+            ],
+            closed: true,
+        };
+        const bodyId = adapter.createDebrisBody(restingSquare, dirt);
+        if (bodyId === null) throw new Error('failed to create debris body');
+
+        // Force-sleep the body (in real demos Box2D's sleep timer
+        // handles this; we short-circuit it here for determinism).
         b2Body_SetAwake(bodyId, false);
         expect(b2Body_IsAwake(bodyId)).toBe(false);
 
-        Carve.circle(bitmap, 10, 62, 2);
+        // Carve the leftmost ground pixels — the chunk rebuilds, but
+        // the polygon under the body remains.
+        Carve.circle(bitmap, 4, 60, 2);
         flushAll();
 
+        // Snapshot/restore detected static support under the body's
+        // AABB and put it back to sleep.
         expect(b2Body_IsAwake(bodyId)).toBe(false);
+    });
+
+    it('wakes a body whose support was carved out (no ghost-float)', () => {
+        // Same setup, but this time the user carves DIRECTLY UNDER the
+        // body. The support polygon under the body's AABB is gone, so
+        // restore must NOT force-sleep — the body has to fall.
+        for (let x = 0; x < 64; x++) for (let y = 56; y < 64; y++) bitmap.setPixel(x, y, 1);
+        flushAll();
+        const restingSquare: Contour = {
+            points: [
+                { x: 28, y: 48 },
+                { x: 36, y: 48 },
+                { x: 36, y: 56 },
+                { x: 28, y: 56 },
+            ],
+            closed: true,
+        };
+        const bodyId = adapter.createDebrisBody(restingSquare, dirt);
+        if (bodyId === null) throw new Error('failed to create debris body');
+        b2Body_SetAwake(bodyId, false);
+        expect(b2Body_IsAwake(bodyId)).toBe(false);
+
+        // Carve a hole spanning the body's footprint. Brush radius 12
+        // at (32, 60) wipes out everything under x in [20, 44].
+        Carve.circle(bitmap, 32, 60, 12);
+        flushAll();
+
+        // Body should be awake (no static under it after the carve).
+        expect(b2Body_IsAwake(bodyId)).toBe(true);
+
+        // Step the world to confirm gravity actually moves it.
+        const yBefore = b2Body_GetTransform(bodyId).p.y;
+        for (let i = 0; i < 5; i++) b2World_Step(worldId, 1 / 60, 4);
+        const yAfter = b2Body_GetTransform(bodyId).p.y;
+        // Box2D y-up; gravity is negative; a falling body's y decreases.
+        expect(yAfter).toBeLessThan(yBefore);
     });
 
     it('a world step after restore does not crash on the restored rotation', () => {

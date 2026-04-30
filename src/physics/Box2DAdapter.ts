@@ -12,6 +12,7 @@ import {
     b2Body_SetLinearVelocity,
     b2Body_SetTransform,
     b2CreateBody,
+    b2Body_ComputeAABB,
     b2DefaultBodyDef,
     b2DefaultQueryFilter,
     b2DestroyBody,
@@ -344,6 +345,15 @@ export class Box2DAdapter {
      * and `SetLinearVelocity` may wake a body internally; restoring
      * `awake = false` after those calls puts settled bodies back to
      * sleep so the next world step skips gravity integration on them.
+     *
+     * The awake restore is conditional: a body that was sleeping
+     * pre-rebuild is put back to sleep ONLY if it still has at least
+     * one static shape overlapping its AABB after the rebuild. If the
+     * user carved away the body's support, the AABB query returns no
+     * static — we leave the body awake so the next world step's gravity
+     * integration drops it normally. Without this gate, snapshot/restore
+     * would force-sleep a body whose support no longer exists, leaving
+     * it suspended in midair (the "ghost float" bug).
      */
     restoreDynamicBodies(snapshots: readonly BodySnapshot[]): void {
         for (const s of snapshots) {
@@ -367,8 +377,48 @@ export class Box2DAdapter {
             );
             b2Body_SetLinearVelocity(s.bodyId, new b2Vec2(s.vx, s.vy));
             b2Body_SetAngularVelocity(s.bodyId, s.omega);
-            b2Body_SetAwake(s.bodyId, s.awake);
+
+            // Decide the awake state. Bodies that were already awake
+            // pre-rebuild stay awake. Bodies that were sleeping go back
+            // to sleep ONLY if support still exists; otherwise we leave
+            // them awake to avoid the ghost-float bug.
+            const desiredAwake = s.awake || !this.hasStaticUnderAABB(s.bodyId);
+            b2Body_SetAwake(s.bodyId, desiredAwake);
         }
+    }
+
+    /**
+     * Returns `true` iff any **static** shape's AABB overlaps the
+     * given dynamic body's current AABB. Used by
+     * {@link restoreDynamicBodies} to detect whether a sleeping body's
+     * support still exists after a terrain rebuild.
+     *
+     * Implementation note: the query AABB is the body's exact computed
+     * AABB (no margin). `b2World_OverlapAABB` reports any shape whose
+     * AABB intersects, which is conservative for a "still in contact"
+     * check — a triangle polygon directly under the body has its AABB
+     * touching the body's AABB at the contact point. A body whose
+     * support was carved out has the nearest static shapes ≥ carve
+     * radius away, so they don't intersect.
+     */
+    private hasStaticUnderAABB(bodyId: BodyId): boolean {
+        const aabb = b2Body_ComputeAABB(bodyId);
+        let found = false;
+        b2World_OverlapAABB(
+            this.worldId,
+            aabb,
+            b2DefaultQueryFilter(),
+            (shapeId): boolean => {
+                const other = b2Shape_GetBody(shapeId);
+                if (b2Body_GetType(other) === b2BodyType.b2_staticBody) {
+                    found = true;
+                    return false; // stop iteration
+                }
+                return true;
+            },
+            null,
+        );
+        return found;
     }
 
     /**
