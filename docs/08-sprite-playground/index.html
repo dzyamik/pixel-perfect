@@ -33,9 +33,19 @@
                 margin-right: 4px;
                 vertical-align: -1px;
             }
+            .toolbar input[type='range'] {
+                vertical-align: -2px;
+                width: 80px;
+                margin: 0 4px;
+            }
+            .toolbar .scale-readout {
+                color: #8b949e;
+                font-variant-numeric: tabular-nums;
+                margin-left: 2px;
+            }
         </style>
-      <script type="module" crossorigin src="../assets/08-sprite-playground-B5ywkEO1.js"></script>
-      <link rel="modulepreload" crossorigin href="../assets/sandbox-CxGrVX1f.js">
+      <script type="module" crossorigin src="../assets/08-sprite-playground-hfFYp75n.js"></script>
+      <link rel="modulepreload" crossorigin href="../assets/sandbox-DxFoZaw5.js">
       <link rel="stylesheet" crossorigin href="../assets/style-DhlUcul5.css">
     </head>
     <body>
@@ -55,6 +65,18 @@
             <label>
                 <input type="checkbox" id="show-aabb" />
                 AABB
+            </label>
+            <label>
+                scale
+                <input
+                    type="range"
+                    id="scale-slider"
+                    min="1"
+                    max="6"
+                    step="0.5"
+                    value="1"
+                />
+                <span class="scale-readout" id="scale-readout">1.0×</span>
             </label>
             <label>
                 upload PNG

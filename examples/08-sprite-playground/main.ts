@@ -46,7 +46,6 @@
 import * as Phaser from 'phaser';
 import { AlphaOverlap } from '../../src/index.js';
 import type {
-    AlphaMask,
     DestructibleTerrain,
     PixelPerfectSprite,
 } from '../../src/index.js';
@@ -157,6 +156,23 @@ class SpritePlaygroundScene extends Phaser.Scene {
                 const file = (event.target as HTMLInputElement).files?.[0];
                 if (file) this.loadUserSprite(file);
             });
+        }
+
+        // Scale slider: setScale on the dragSprite directly. The
+        // PixelPerfectSprite cache invalidates automatically when
+        // scaleX/Y differs from the cached value, so the alpha-mask
+        // outline + collision both track the visible footprint.
+        const scaleSlider = document.getElementById('scale-slider') as HTMLInputElement | null;
+        const scaleReadout = document.getElementById('scale-readout');
+        if (scaleSlider !== null) {
+            scaleSlider.value = '1';
+            const apply = () => {
+                const v = Number.parseFloat(scaleSlider.value);
+                this.dragSprite.setScale(v);
+                if (scaleReadout !== null) scaleReadout.textContent = `${v.toFixed(1)}×`;
+            };
+            scaleSlider.addEventListener('input', apply);
+            apply();
         }
 
         // Drag-and-drop on the canvas as an alternative to the file
@@ -331,13 +347,13 @@ class SpritePlaygroundScene extends Phaser.Scene {
 
     /**
      * Traces the sprite's alpha mask via `AlphaOverlap.maskToContours`
-     * and renders the contour lines in the supplied color. Mask
-     * coordinates are local to the texture; we offset by the
-     * sprite's scene-space top-left to draw.
+     * and renders the contour lines in the supplied color. We use the
+     * sprite's effective (post-flip, post-scale) mask so the outline
+     * tracks whatever the overlap math actually sees — including
+     * runtime `setScale` changes.
      */
     private drawAlphaOutline(sprite: PixelPerfectSprite, color: number): void {
-        const mask = this.extractMask(sprite);
-        if (mask === null) return;
+        const mask = sprite.getEffectiveAlphaMask();
         const x0 = Math.round(sprite.x - sprite.displayWidth * sprite.originX);
         const y0 = Math.round(sprite.y - sprite.displayHeight * sprite.originY);
         const contours = AlphaOverlap.maskToContours(mask, 0.5);
@@ -354,28 +370,6 @@ class SpritePlaygroundScene extends Phaser.Scene {
             if (c.closed) this.overlay.closePath();
             this.overlay.strokePath();
         }
-    }
-
-    /**
-     * Extracts an `AlphaMask` from the sprite's frame source. Mirrors
-     * the (private) extraction inside `PixelPerfectSprite` so we can
-     * draw the same mask the overlap math uses without exposing the
-     * cache.
-     */
-    private extractMask(sprite: PixelPerfectSprite): AlphaMask | null {
-        const frame = sprite.frame;
-        const source = frame.source.image as HTMLImageElement | HTMLCanvasElement;
-        if (typeof (source as { tagName?: string }).tagName !== 'string') return null;
-        const w = frame.cutWidth;
-        const h = frame.cutHeight;
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        if (ctx === null) return null;
-        ctx.drawImage(source, frame.cutX, frame.cutY, w, h, 0, 0, w, h);
-        const data = ctx.getImageData(0, 0, w, h);
-        return AlphaOverlap.alphaSourceToMask({ data: data.data, width: w, height: h });
     }
 }
 

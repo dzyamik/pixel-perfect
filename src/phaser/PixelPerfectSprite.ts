@@ -15,18 +15,21 @@ import type { DestructibleTerrain } from './DestructibleTerrain.js';
  * one-byte checks; cheap but not free, so callers that test many pairs
  * should AABB-cull externally first.
  *
- * v1 limitations:
+ * Limitations:
  *
  *  - **No rotation.** The mask is sampled axis-aligned. A sprite with
  *    `rotation !== 0` produces overlap results computed against an
  *    unrotated bounding mask, which is wrong. Rotating the mask
- *    on-the-fly is a v1.x feature.
- *  - **No scaling.** Overlap math assumes `scaleX === scaleY === 1`
- *    (and matching `displayWidth` / `displayHeight`). Scaled sprites
- *    will produce wrong results and the constructor logs a one-time
- *    warning to the console.
+ *    on-the-fly is a future feature.
  *  - **`flipX` / `flipY`** are honored — index lookup is mirrored when
  *    sampling the mask.
+ *  - **Scaling** (`scaleX` / `scaleY`) is honored via nearest-neighbor
+ *    stretch of the cached mask. The cache invalidates when the scale
+ *    changes, so `setScale(...)` at runtime works without manual
+ *    `invalidateAlphaMask()` calls. Memory cost is `O(scaleX × scaleY)`
+ *    per cached mask — fine up to 8× for typical sprite sizes; beyond
+ *    that consider rendering at native size and scaling the visual
+ *    GameObject in some other way.
  *  - **Render textures** as the source image are not supported. Use
  *    standard image / canvas textures.
  *
@@ -39,13 +42,13 @@ import type { DestructibleTerrain } from './DestructibleTerrain.js';
  */
 export class PixelPerfectSprite extends Phaser.GameObjects.Sprite {
     /**
-     * Cached alpha mask for the current frame. `null` until the first
-     * overlap call. Invalidated when {@link onFrameChange} sees a
-     * different frame name.
+     * Cached alpha mask, post-flip + post-scale. `null` until the
+     * first overlap call. Invalidated when the cache key changes
+     * (frame name, flipX/Y, scaleX/Y).
      */
     private cachedMask: AlphaMask | null = null;
-    /** The frame name the cached mask was extracted from. */
-    private cachedFrameName: string | null = null;
+    /** Composite key for the cached mask: frame name + flip + scale. */
+    private cachedMaskKey: string | null = null;
 
     constructor(
         scene: Phaser.Scene,
@@ -104,21 +107,45 @@ export class PixelPerfectSprite extends Phaser.GameObjects.Sprite {
     /**
      * Drops the cached alpha mask. Call after mutating the underlying
      * texture (e.g. drawing into a `RenderTexture`); the next overlap
-     * call will re-extract.
+     * call will re-extract. Frame, flip, and scale changes invalidate
+     * the cache automatically — this method is only needed when the
+     * texture's pixel data itself changed.
      */
     invalidateAlphaMask(): void {
         this.cachedMask = null;
-        this.cachedFrameName = null;
+        this.cachedMaskKey = null;
+    }
+
+    /**
+     * Returns the alpha mask the overlap math actually uses for the
+     * sprite's current frame, flip, and scale state. Lazily extracted
+     * on first call (cost: one canvas read + thresholding pass) and
+     * cached for subsequent calls until any of the cache-key inputs
+     * change.
+     *
+     * Useful for visualization (drawing the outline, debug overlays)
+     * — see demo 08's outline path. Hot-loop callers should still go
+     * through `overlapsPixelPerfect` / `overlapsTerrain` which avoid
+     * an unnecessary extra access.
+     *
+     * Mutating the returned mask's `data` is allowed but pointless;
+     * the cache holds the same reference, so any change is visible
+     * to the next overlap call. The library does not mutate it.
+     */
+    getEffectiveAlphaMask(): AlphaMask {
+        return this.getAlphaMask();
     }
 
     private getAlphaMask(): AlphaMask {
-        const frameName = String(this.frame.name);
-        if (this.cachedMask !== null && this.cachedFrameName === frameName) {
+        const sx = Math.abs(this.scaleX);
+        const sy = Math.abs(this.scaleY);
+        const key = `${this.frame.name}|${this.flipX ? 1 : 0}${this.flipY ? 1 : 0}|${sx}x${sy}`;
+        if (this.cachedMask !== null && this.cachedMaskKey === key) {
             return this.cachedMask;
         }
         const mask = this.extractAlphaMask();
         this.cachedMask = mask;
-        this.cachedFrameName = frameName;
+        this.cachedMaskKey = key;
         return mask;
     }
 
@@ -171,10 +198,20 @@ export class PixelPerfectSprite extends Phaser.GameObjects.Sprite {
         // Honor flipX / flipY by mirroring the mask if needed. This
         // happens once per cache miss; runtime overlap is then a plain
         // index lookup.
-        if (this.flipX || this.flipY) {
-            return mirrorMask(baseMask, this.flipX, this.flipY);
-        }
-        return baseMask;
+        const flipped =
+            this.flipX || this.flipY
+                ? mirrorMask(baseMask, this.flipX, this.flipY)
+                : baseMask;
+
+        // Honor scaleX / scaleY by nearest-neighbor stretching the
+        // mask to displayWidth × displayHeight so overlap math sees
+        // the same footprint Phaser draws. `Math.abs` because flipping
+        // is already handled above; a negative scale would be a
+        // double-flip we don't want.
+        const sx = Math.abs(this.scaleX);
+        const sy = Math.abs(this.scaleY);
+        if (sx === 1 && sy === 1) return flipped;
+        return scaleMask(flipped, sx, sy);
     }
 
     /**
@@ -205,4 +242,37 @@ function mirrorMask(mask: AlphaMask, flipX: boolean, flipY: boolean): AlphaMask 
         }
     }
     return { data: out, width: w, height: h };
+}
+
+/**
+ * Returns a new mask stretched by `(sx, sy)` via nearest-neighbor.
+ * Output dimensions are `round(width * sx)` × `round(height * sy)`,
+ * matching Phaser's `displayWidth` / `displayHeight` convention.
+ *
+ * Nearest-neighbor (rather than bilinear) keeps the alpha mask binary
+ * — every output cell is either fully solid or fully transparent —
+ * and preserves the pixel-art aesthetic. Sub-pixel positioning during
+ * overlap rounds to the nearest scene pixel anyway, so bilinear
+ * sampling would just blur the mask edges without buying anything.
+ *
+ * Memory cost: `O(sx × sy)` per cached mask. For the typical 32×32
+ * sprite at 4× scale that's a 128×128 = 16 KB Uint8Array, allocated
+ * once per cache miss.
+ */
+function scaleMask(mask: AlphaMask, sx: number, sy: number): AlphaMask {
+    const dw = Math.max(1, Math.round(mask.width * sx));
+    const dh = Math.max(1, Math.round(mask.height * sy));
+    const out = new Uint8Array(dw * dh);
+    const srcW = mask.width;
+    const srcH = mask.height;
+    for (let y = 0; y < dh; y++) {
+        const srcY = Math.min(srcH - 1, Math.floor(y / sy));
+        const rowBase = srcY * srcW;
+        const outBase = y * dw;
+        for (let x = 0; x < dw; x++) {
+            const srcX = Math.min(srcW - 1, Math.floor(x / sx));
+            out[outBase + x] = mask.data[rowBase + srcX]!;
+        }
+    }
+    return { data: out, width: dw, height: dh };
 }
