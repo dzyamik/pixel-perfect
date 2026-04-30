@@ -2,6 +2,109 @@
 
 All notable changes to this project will be documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) loosely; this project does not yet publish to npm.
 
+## [v1.1.0] — 2026-04-30
+
+Two `PixelPerfectSprite` v1 limitations lifted (scaling and rotation),
+the last open known limitation closed (sub-pixel jitter on actively-
+carved chunks), and three new public helpers in `core/queries`.
+
+### Added — `PixelPerfectSprite` scaling + rotation
+
+- `setScale(...)` is honored. The cached alpha mask is nearest-
+  neighbor stretched to `displayWidth × displayHeight` on
+  extraction. Cache invalidates automatically when scale changes,
+  so runtime `setScale` works without manual
+  `invalidateAlphaMask()` calls. Memory cost is `O(scaleX × scaleY)`
+  per cached mask — fine up to 8× for typical sprite sizes.
+- `rotation` is honored. Unrotated sprites dispatch to the cheap
+  axis-aligned path (`maskMaskOverlap` / `maskBitmapOverlap`);
+  rotated sprites use the new transformed variants which
+  back-rotate each sample point at the cost of a few muls/adds
+  per pixel. AABB-cull bounds the work to the rotated bounding
+  box's intersection.
+- New public method `sprite.getEffectiveAlphaMask()` returns the
+  post-flip, post-scale mask the overlap math actually uses.
+  Useful for visualization (e.g. drawing the alpha-mask outline)
+  without duplicating extraction logic.
+
+### Added — `core/queries/AlphaOverlap` (transformed surface)
+
+```ts
+interface MaskTransform {
+    x: number;
+    y: number;
+    pivotX?: number;     // mask-local
+    pivotY?: number;
+    rotation?: number;   // radians
+}
+
+transformedMaskBounds(mask, t)            // scene-space AABB
+maskMaskOverlapTransformed(a, ta, b, tb)  // rotated sprite ↔ sprite
+maskBitmapOverlapTransformed(mask, t, bm) // rotated sprite ↔ terrain
+```
+
+The transform places the mask's pivot at scene `(x, y)` and rotates
+the mask by `rotation` radians around `(pivotX, pivotY)` in
+mask-local space. With the defaults the transform reduces to the
+axis-aligned `maskMaskOverlap` / `maskBitmapOverlap` convention.
+
+Sampling correctness: integer-pixel back-rotation lands on cell
+boundaries at multiples of 90°, and `floor()` rolls into the wrong
+neighbor. The transformed paths sample at pixel centers
+(`sx + 0.5, sy + 0.5`) to avoid the off-by-one. Axis-aligned
+identity transforms still return identical results to the simple
+overlap helpers.
+
+### Added — `AlphaOverlap.maskToContours`
+
+Wraps an alpha mask in a single-chunk temp `ChunkedBitmap`, runs
+marching squares + Douglas-Peucker, and returns contours in
+mask-local coordinates. Backs the alpha-mask outline drawing in
+demos 08; useful for any UI that wants to outline a sprite's
+pixel-perfect footprint.
+
+### Fixed — sub-pixel jitter on actively-carved chunks
+
+The last open known limitation. Continuous-drag carving rebuilt a
+chunk's static body every frame; `b2DestroyShapeInternal` woke
+every dynamic body contacting it, and the cycle of "wake → gravity
+for one step → narrow-phase contact recreation → resolve back"
+injected a small velocity each frame that didn't fully dissipate
+before the next rebuild. Box2D's natural sleep timer never reached
+`sleepTime` under continuous waking.
+
+`Box2DAdapter.restoreDynamicBodies` now has a force-settle branch:
+if a body has at least one static shape overlapping its AABB AND
+its pre-rebuild speed² is below `0.01 m²/s²` (~0.1 m/s; tighter
+than Box2D's natural sleep threshold of `0.05`), zero its velocity
+and sleep regardless of pre-rebuild awake state. Acts as the
+manual shortcut for what Box2D's `sleepTime` accumulator would do
+if the rebuild cycle weren't waking the body each frame. See
+`docs-dev/PROGRESS.md` § "RESOLVED — sub-pixel jitter" for the
+full design record + trade-off discussion.
+
+### Demos
+
+- Demo 08 (sprite playground) gained scale + rotation sliders. The
+  cyan alpha-mask outline projects each contour vertex through the
+  same Phaser scale-and-rotate transform, so the outline tracks
+  scaling and rotation in real time.
+- Demo 08's AABB indicator switched to `sprite.getBounds()` so the
+  rectangle shows the rotated AABB (what a naive cheap-collision
+  pre-check would actually see).
+
+### Tests
+
+12 new tests across `tests/core/queries/AlphaOverlap.test.ts` and
+`tests/integration/Phase2Pipeline.test.ts` covering the transformed
+surface (AABB invariants, identity reduces to axis-aligned,
+90°/180° geometry checks, rotated mask vs bitmap solid block) and
+the force-settle path (low-vel awake body settles; fast body
+preserved). Total suite now 252 tests across 19 files; typecheck
+and lint clean.
+
+---
+
 ## [v1.0.0] — 2026-04-30
 
 Phase 5 of `docs-dev/02-roadmap.md`: docs & polish. Project reaches
@@ -65,10 +168,9 @@ single blobs, multiple disjoint blobs, and edge-touching cells.
 ### Known limitations carried into v1.x
 
 - Sub-pixel jitter on bodies in the chunk being **actively**
-  carved during continuous drag. Bodies on other chunks are
-  unaffected. See `docs-dev/PROGRESS.md` § "KNOWN LIMITATIONS".
+  carved during continuous drag — closed in v1.1.0.
 - `PixelPerfectSprite` overlap math assumes `scale = 1` and
-  `rotation = 0`. Scaling is the next v1.x deliverable.
+  `rotation = 0` — both lifted in v1.1.0.
 - Hero gif/video for the README is a v1.0.x polish item — the
   recipe is in `PROGRESS.md`.
 
