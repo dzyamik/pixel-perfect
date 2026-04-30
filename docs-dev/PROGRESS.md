@@ -20,8 +20,13 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v1.x — sprite transforms + jitter fix | ✅ done | `v1.1.0` |
 | v2 — falling-sand cellular automaton | ✅ initial release | `v2.0.0` |
 | v2.x — water + density swap | ✅ done | `v2.1.0` |
+| v2.x — dev-server media fix | ✅ done | `v2.1.1` |
+| v2.2 — sand-pile-becomes-static (settling) | ✅ done | `v2.2.0` |
+| v2.3 — more fluid kinds (gas, oil, fire) | ⬜ planned | — |
+| v2.4 — active-cell tracking (perf) | ⬜ planned | — |
+| v2.5 — VitePress concept-and-recipes site + tutorial | ⬜ planned | — |
 
-Test suite: 270 tests across 20 files, ~2.1 s. typecheck and lint clean.
+Test suite: 275 tests across 20 files, ~1.5 s. typecheck and lint clean.
 
 The library now has its public Phaser entry point: register
 `PixelPerfectPlugin` once at game creation (mapping `'pixelPerfect'`)

@@ -17,6 +17,7 @@ Phase progression:
 - ✅ **v1.1 — `PixelPerfectSprite` scaling + rotation, jitter fix** (`v1.1.0`): both v1 sprite limitations lifted; the residual sub-pixel jitter on actively-carved chunks closed via force-settle in `Box2DAdapter.restoreDynamicBodies`.
 - ✅ **v2 — cellular-automaton falling sand** (`v2.0.0`): `Material.simulation: 'static' | 'sand'`, `CellularAutomaton.step`, `DestructibleTerrain.simStep` + `autoSimulate` opt-in, demo 09. Static-only collider filtering means per-frame sand motion doesn't trigger physics rebuilds.
 - ✅ **v2.1 — water + density swap** (`v2.1.0`): `SimulationKind` extended with `'water'`. Water falls / slides diagonally / spreads horizontally. Sand sinks through water on straight-down moves; water doesn't displace sand. Demo 09 gained a sand/water tool toggle.
+- ✅ **v2.2 — sand-pile settling** (`v2.2.0`): bridges fluid sim and physics. `Material.settlesTo` + `settleAfterTicks` promote at-rest sand cells to a static variant that joins the collider mesh, so dynamic bodies can stand on piles. New `ChunkedBitmap.cellTimers` per-cell `Uint8Array` for any per-tick state. Demo 09 wired Box2D + a `B`-key ball drop so the bridge is visible end-to-end.
 
 The seven runnable demos are in `examples/`, built into `docs/`:
 

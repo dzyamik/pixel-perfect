@@ -71,6 +71,23 @@ export interface Material {
      * identically without changes.
      */
     simulation?: SimulationKind;
+    /**
+     * If a fluid cell of this material doesn't move for
+     * `settleAfterTicks` consecutive ticks, it's promoted in place
+     * to material id `settlesTo`. The promoted material is typically
+     * a `'static'`-simulation variant of the same visual color so
+     * the pile becomes part of the static collider mesh.
+     *
+     * Both fields must be set for settling to engage; either one
+     * undefined disables it. Threshold caps at 255 (the underlying
+     * `cellTimers` Uint8Array's max).
+     *
+     * Bridges fluid sim and physics: a sand pile that's been at
+     * rest for 30 ticks (~0.5 s at 60 fps) becomes part of the
+     * terrain and dynamic bodies can stand on it.
+     */
+    settlesTo?: number;
+    settleAfterTicks?: number;
 }
 
 /**

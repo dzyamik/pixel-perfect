@@ -83,6 +83,13 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
  * Sand step: fall straight down (air or water — density swap), or
  * slide diagonally into pure air. Doesn't displace water on
  * diagonals (would require multi-cell swap; deferred).
+ *
+ * If the sand cell didn't move this tick AND the material has
+ * `settlesTo` + `settleAfterTicks` configured, increments the
+ * per-cell rest timer. Once the timer reaches the threshold the
+ * cell is promoted in place to the `settlesTo` material — typically
+ * a `'static'` variant that joins the static collider mesh, so the
+ * pile starts supporting dynamic bodies.
  */
 function stepSand(
     bitmap: ChunkedBitmap,
@@ -94,7 +101,12 @@ function stepSand(
     H: number,
     goRight: boolean,
 ): void {
-    if (y + 1 >= H) return; // bottom row, nowhere to go
+    if (y + 1 >= H) {
+        // Bottom row, nowhere to go. Treat as "didn't move" — settle
+        // path applies (sand on the world floor should still settle).
+        maybeSettle(bitmap, materials, x, y, id);
+        return;
+    }
 
     // Fall straight down. Allow swap into water.
     const below = bitmap.getPixel(x, y + 1);
@@ -118,6 +130,41 @@ function stepSand(
             return;
         }
     }
+
+    // Didn't move this tick — increment the rest timer; if at the
+    // promotion threshold, settle.
+    maybeSettle(bitmap, materials, x, y, id);
+}
+
+/**
+ * Increments the at-rest timer for a non-moving sand cell and, if
+ * the material's `settleAfterTicks` threshold is reached, promotes
+ * it in place to `settlesTo`. No-op for materials that don't opt
+ * into settling.
+ */
+function maybeSettle(
+    bitmap: ChunkedBitmap,
+    materials: MaterialRegistry,
+    x: number,
+    y: number,
+    id: number,
+): void {
+    const material = materials.get(id);
+    if (material === undefined) return;
+    if (material.settlesTo === undefined || material.settleAfterTicks === undefined) {
+        return;
+    }
+    const timers = bitmap.cellTimers;
+    const idx = y * bitmap.width + x;
+    const current = timers[idx]!;
+    if (current + 1 >= material.settleAfterTicks) {
+        // Promote — setPixel auto-resets the timer for the new
+        // occupant, so we don't need to explicitly clear it.
+        bitmap.setPixel(x, y, material.settlesTo);
+        return;
+    }
+    // Saturate at 255 to avoid wraparound.
+    timers[idx] = current === 255 ? 255 : current + 1;
 }
 
 /**

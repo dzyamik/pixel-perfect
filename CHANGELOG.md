@@ -2,6 +2,62 @@
 
 All notable changes to this project will be documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) loosely; this project does not yet publish to npm.
 
+## [v2.2.0] — 2026-04-30
+
+Sand-pile-becomes-static. The bridge between fluid sim and physics:
+sand grains that have been at rest for `settleAfterTicks` tick(s)
+get promoted in place to a `'static'`-simulation variant ("settled
+sand"), join the static collider mesh, and start supporting dynamic
+bodies. Demo 09 grew a `B`-key ball-drop so you can see this
+end-to-end — pour sand, wait for the pile, drop a ball, watch it
+roll on the cured pile.
+
+### Added — data model
+
+- `ChunkedBitmap.cellTimers` — lazy-allocated `Uint8Array(width *
+  height)` of per-cell counters. Used by `CellularAutomaton.step`
+  for any feature that needs state across ticks. Auto-reset to 0
+  by `setPixel` because a cell's content just changed; whatever
+  timer was tracked for the previous occupant is no longer
+  meaningful for the new one. Caps at 255 (Uint8Array max).
+- `Material.settlesTo?: number` and `Material.settleAfterTicks?:
+  number` — the promotion target id and the rest-tick threshold.
+  Both must be set for settling to engage; either undefined
+  disables the path.
+
+### Added — simulation
+
+- `CellularAutomaton.stepSand` checks for settling whenever a sand
+  cell didn't move this tick (blocked downward AND no diagonal
+  slide). Increments the cell's timer; promotes via `setPixel(x,
+  y, settlesTo)` when the threshold is reached. Sand cells that
+  move on a given tick reset their timer (handled implicitly by
+  `setPixel`'s auto-reset).
+
+### Demo 09
+
+- New `SETTLED_SAND` material — `simulation: 'static'`, slightly
+  desaturated tone vs SAND so grains are visibly "locking in".
+- `SAND.settlesTo = SETTLED_SAND.id`, `settleAfterTicks = 30`
+  (~0.5 s at 60 fps).
+- Box2D world wired in. `B` key spawns a debris ball at the cursor.
+  The ball falls onto the funnel, lands on settled-sand piles,
+  rolls naturally — the visual proof that fluid sim and physics
+  bridge correctly.
+- Stats overlay tracks sand / water / settled-sand / ball counts.
+
+### Tests
+
+5 new cases in `tests/core/algorithms/CellularAutomaton.test.ts`:
+timer accumulates when at rest and promotes at threshold; moving
+sand never accumulates (timer resets on every move); sand without
+settlesTo configured never promotes; promoted material is static
+and doesn't move on subsequent ticks; carving a settled cell
+clears it without leftover state. Total suite now 275 tests
+across 20 files; typecheck and lint clean.
+
+---
+
 ## [v2.1.1] — 2026-04-30
 
 Build / tooling polish.

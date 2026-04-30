@@ -428,6 +428,157 @@ describe('CellularAutomaton.step', () => {
         expect(bm.getPixel(0, 3)).toBe(sand.id);
     });
 
+    it('a sand cell at rest accumulates timer and promotes at threshold', () => {
+        // Sand on stone floor, settles to settled-sand after 3 ticks.
+        const SETTLED = 4;
+        const settledSand: Material = {
+            id: SETTLED,
+            name: 'settled-sand',
+            color: 0xa08050,
+            density: 1,
+            friction: 0.7,
+            restitution: 0.05,
+            destructible: true,
+            destructionResistance: 0,
+            simulation: 'static',
+        };
+        const settlingSand: Material = {
+            ...sand,
+            settlesTo: SETTLED,
+            settleAfterTicks: 3,
+        };
+        const bm = new ChunkedBitmap({
+            width: 1,
+            height: 2,
+            chunkSize: 1,
+            materials: [settlingSand, stone, settledSand],
+        });
+        bm.setPixel(0, 0, settlingSand.id);
+        bm.setPixel(0, 1, stone.id);
+
+        // Tick 1: can't move (stone below), timer 0→1.
+        CellularAutomaton.step(bm, 0);
+        expect(bm.getPixel(0, 0)).toBe(settlingSand.id);
+        expect(bm.cellTimers[0]).toBe(1);
+
+        // Tick 2: timer 1→2.
+        CellularAutomaton.step(bm, 1);
+        expect(bm.getPixel(0, 0)).toBe(settlingSand.id);
+        expect(bm.cellTimers[0]).toBe(2);
+
+        // Tick 3: timer 2→3, threshold reached (3 ≥ 3) → promote.
+        CellularAutomaton.step(bm, 2);
+        expect(bm.getPixel(0, 0)).toBe(SETTLED);
+        // setPixel auto-reset the timer.
+        expect(bm.cellTimers[0]).toBe(0);
+    });
+
+    it('a moving sand cell does not accumulate timer (resets on every move)', () => {
+        // Tall column of air with a single sand grain at the top.
+        // Sand falls one row per tick; never has a chance to settle.
+        const settlingSand: Material = {
+            ...sand,
+            settlesTo: 99, // would never fire
+            settleAfterTicks: 1,
+        };
+        const bm = new ChunkedBitmap({
+            width: 1,
+            height: 6,
+            chunkSize: 1,
+            materials: [settlingSand],
+        });
+        bm.setPixel(0, 0, settlingSand.id);
+        for (let t = 0; t < 5; t++) {
+            CellularAutomaton.step(bm, t);
+        }
+        // Sand falls to the bottom row, still its original id.
+        expect(bm.getPixel(0, 5)).toBe(settlingSand.id);
+        // Timer at the resting cell — depends on whether the bottom
+        // row has been hit yet. After 5 ticks from row 0, sand is at
+        // row 5 and has been there for 0 ticks. We'd need one more
+        // tick at the bottom for the timer to start incrementing.
+        expect(bm.cellTimers[5 * bm.width]).toBe(0);
+    });
+
+    it('sand without settlesTo configured never promotes', () => {
+        // Vanilla sand (no settling fields), parked on stone.
+        const bm = gridBitmap(['s', '#']);
+        for (let t = 0; t < 100; t++) CellularAutomaton.step(bm, t);
+        // Still sand.
+        expect(bm.getPixel(0, 0)).toBe(sand.id);
+    });
+
+    it('promoted material is static and does not move on subsequent ticks', () => {
+        const SETTLED = 4;
+        const settledSand: Material = {
+            id: SETTLED,
+            name: 'settled-sand',
+            color: 0xa08050,
+            density: 1,
+            friction: 0.7,
+            restitution: 0.05,
+            destructible: true,
+            destructionResistance: 0,
+            simulation: 'static',
+        };
+        const settlingSand: Material = {
+            ...sand,
+            settlesTo: SETTLED,
+            settleAfterTicks: 1,
+        };
+        const bm = new ChunkedBitmap({
+            width: 1,
+            height: 3,
+            chunkSize: 1,
+            materials: [settlingSand, settledSand, stone],
+        });
+        bm.setPixel(0, 0, settlingSand.id);
+        bm.setPixel(0, 2, stone.id);
+
+        // Tick 1: sand at row 0 can fall to row 1 (air below). It
+        // moves; timer at the new position is 0 because setPixel
+        // resets it.
+        CellularAutomaton.step(bm, 0);
+        expect(bm.getPixel(0, 1)).toBe(settlingSand.id);
+        expect(bm.cellTimers[1]).toBe(0);
+
+        // Tick 2: sand at row 1 has stone below; can't move. Timer 0→1,
+        // threshold (1) reached → promote.
+        CellularAutomaton.step(bm, 1);
+        expect(bm.getPixel(0, 1)).toBe(SETTLED);
+
+        // Tick 3+: settled-sand is static, never moves again.
+        for (let t = 2; t < 10; t++) CellularAutomaton.step(bm, t);
+        expect(bm.getPixel(0, 1)).toBe(SETTLED);
+    });
+
+    it('carving a settled cell removes it cleanly (no leftover state)', () => {
+        const SETTLED = 4;
+        const settledSand: Material = {
+            id: SETTLED,
+            name: 'settled-sand',
+            color: 0xa08050,
+            density: 1,
+            friction: 0.7,
+            restitution: 0.05,
+            destructible: true,
+            destructionResistance: 0,
+            simulation: 'static',
+        };
+        const bm = new ChunkedBitmap({
+            width: 1,
+            height: 1,
+            chunkSize: 1,
+            materials: [settledSand],
+        });
+        bm.setPixel(0, 0, SETTLED);
+        // Carve via setPixel(0).
+        bm.setPixel(0, 0, 0);
+        expect(bm.getPixel(0, 0)).toBe(0);
+        // Timer is reset by setPixel automatically.
+        expect(bm.cellTimers[0]).toBe(0);
+    });
+
     it('unknown / unset simulation kind defaults to static (back-compat)', () => {
         // A material whose `simulation` is undefined behaves like static.
         const dirt: Material = {

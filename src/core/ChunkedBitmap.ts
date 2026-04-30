@@ -47,6 +47,22 @@ export class ChunkedBitmap {
     readonly chunks: readonly Chunk[];
 
     /**
+     * Per-cell counter used by the cellular-automaton step for
+     * features that need state across ticks — e.g. how long a sand
+     * cell has been at rest before promoting to a static "settled"
+     * material, or how long a fire cell has been burning before
+     * dying out.
+     *
+     * Lazy-allocated on first access (zero-initialized
+     * `Uint8Array(width * height)`). Auto-reset to 0 by `setPixel`
+     * because the cell's content just changed; whatever timer was
+     * being tracked for the previous occupant is no longer
+     * meaningful for the new one. Caps at 255 (Uint8Array max);
+     * thresholds above 255 saturate.
+     */
+    private _cellTimers: Uint8Array | null = null;
+
+    /**
      * @throws If width/height/chunkSize are not positive integers, or if
      *         chunkSize does not divide width and height evenly.
      */
@@ -164,6 +180,33 @@ export class ChunkedBitmap {
         chunk.bitmap[index] = materialId;
         chunk.dirty = true;
         chunk.visualDirty = true;
+        // Cell content changed — any per-cell timer (rest counter,
+        // burn timer, etc.) tracked for the previous occupant is no
+        // longer meaningful for the new one. Reset.
+        if (this._cellTimers !== null) {
+            this._cellTimers[y * this.width + x] = 0;
+        }
+    }
+
+    /**
+     * Lazy-allocated `Uint8Array(width * height)` of per-cell counters
+     * used by `CellularAutomaton.step` for features that need state
+     * across ticks (sand-rest counter, fire-burn timer, etc.).
+     *
+     * On first read, the array is zero-initialized. Subsequent reads
+     * return the same instance. `setPixel` auto-resets the cell's
+     * timer to 0 because the cell's content just changed; the
+     * cellular-automaton step manages increments and threshold checks
+     * on cells that didn't move this tick.
+     *
+     * Caps at 255 per cell (Uint8Array max); threshold checks above
+     * 255 saturate.
+     */
+    get cellTimers(): Uint8Array {
+        if (this._cellTimers === null) {
+            this._cellTimers = new Uint8Array(this.width * this.height);
+        }
+        return this._cellTimers;
     }
 
     /**
