@@ -16,7 +16,7 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | ~~2.5 — cross-chunk stitching~~ | retired (subsumed by per-chunk + polygon model) | `v0.2.5` |
 | 3 — Phaser integration | ✅ done | `v0.3.0` |
 | 4 — examples | ✅ done | `v0.4.0` |
-| 5 — docs & polish | 🟡 in flight | — |
+| 5 — docs & polish | ✅ done | `v1.0.0` |
 
 Test suite: 236 tests across 19 files, ~1.4 s. typecheck and lint clean.
 
@@ -551,7 +551,7 @@ pipeline and the sprite collision feature. Demo 06 is the
 Phase 3 deliverables from `02-roadmap.md` are all done. A
 `v0.3.0` tag is appropriate after the user verifies demo 05.
 
-## Phase 5 progress (in flight)
+## Phase 5 progress (closed at `v1.0.0`)
 
 - ✅ TypeDoc API reference. `npm run build` now runs `vite build`
   and then `npm run docs:api`, so `docs/api/` is regenerated as

@@ -2,7 +2,12 @@
 
 All notable changes to this project will be documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) loosely; this project does not yet publish to npm.
 
-## Unreleased — Phase 5 (docs & polish, in flight)
+## [v1.0.0] — 2026-04-30
+
+Phase 5 of `docs-dev/02-roadmap.md`: docs & polish. Project reaches
+v1: stable public API, complete example surface, browseable docs.
+
+### Added — onboarding & polish
 
 - TypeDoc API reference auto-generated into `docs/api/` as part of
   every `npm run build`. Linked from README, the demo landing
@@ -16,6 +21,56 @@ All notable changes to this project will be documented in this file. The format 
   `DebrisCreatedEvent`, `chunkToContours`, `contourToTriangles`,
   `paintChunkPixels`, `buildColorLut`, `AlphaMask`) so the
   generated API ref covers everything users can reach.
+- "View source" link on every demo's nav, pointing at the demo's
+  `main.ts` on GitHub. Each runnable demo doubles as a copy-
+  pasteable code reference.
+
+### Added — demo 08 — sprite playground
+
+`examples/08-sprite-playground/`: drag-and-test sandbox for
+`PixelPerfectSprite`. Toolbar checkboxes for outline / AABB
+visibility; file input (and canvas drag-drop) to load any PNG and
+swap the dragger's texture. Cyan outline traces the alpha mask
+the collision math actually uses, via the new
+`AlphaOverlap.maskToContours(mask, epsilon)` primitive.
+
+### Added — `core/queries/AlphaOverlap.maskToContours`
+
+Public helper that wraps an alpha mask in a single-chunk temp
+`ChunkedBitmap`, runs marching squares + Douglas-Peucker, and
+returns contours in mask-local coordinates. Useful for any UI
+that wants to outline a sprite's pixel-perfect footprint without
+rolling marching squares by hand. 4 unit tests cover empty masks,
+single blobs, multiple disjoint blobs, and edge-touching cells.
+
+### Changed
+
+- Architecture, changelog, and skill docs reconciled with what
+  actually shipped after the Phase 3 collider-model rewrite (per-
+  chunk + polygon, snapshot/restore + ghost-float fix). Stale
+  references to `b2ChainShape`, the v0.2.5 cross-chunk stitching,
+  the `perFrameBudget` option, and the `terrain.on(...)` event
+  surface are gone.
+- `npm run build` chains `vite build` and then `npm run docs:api`
+  so the TypeDoc output survives Vite's `emptyOutDir: true` and
+  lands alongside the demos at `docs/api/`.
+
+### Tests
+
+- 5 new tests in `tests/core/queries/AlphaOverlap.test.ts` (4 for
+  `maskToContours`, plus the prior 16 still pass).
+- Total suite now 240 tests across 19 files, ~1.4 s. typecheck +
+  lint clean.
+
+### Known limitations carried into v1.x
+
+- Sub-pixel jitter on bodies in the chunk being **actively**
+  carved during continuous drag. Bodies on other chunks are
+  unaffected. See `docs-dev/PROGRESS.md` § "KNOWN LIMITATIONS".
+- `PixelPerfectSprite` overlap math assumes `scale = 1` and
+  `rotation = 0`. Scaling is the next v1.x deliverable.
+- Hero gif/video for the README is a v1.0.x polish item — the
+  recipe is in `PROGRESS.md`.
 
 ---
 

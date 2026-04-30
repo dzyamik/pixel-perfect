@@ -11,7 +11,7 @@
 </ul>
 <p>The bitmap is the source of truth — all visuals and physics colliders are derived from it. Mutate the bitmap; everything else updates automatically at end-of-frame.</p>
 <a id="md:why" class="tsd-anchor"></a><h2 class="tsd-anchor-link">Why<a href="#md:why" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h2><p>Phaser v4 + Phaser Box2D are both production-ready, but no maintained library exists for pixel-perfect spatial reasoning on this stack. This fills the gap.</p>
-<a id="md:live-demos" class="tsd-anchor"></a><h2 class="tsd-anchor-link">Live demos<a href="#md:live-demos" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h2><p>The <code>examples/</code> folder is built into <code>docs/</code> and committed; run them locally with <code>npm run dev</code>, or browse the deployed copies at <a href="https://dzyamik.github.io/pixel-perfect/" target="_blank" class="external">https://dzyamik.github.io/pixel-perfect/</a>.</p>
+<a id="md:live-demos" class="tsd-anchor"></a><h2 class="tsd-anchor-link">Live demos<a href="#md:live-demos" aria-label="Permalink" class="tsd-anchor-icon"><svg viewBox="0 0 24 24"><use href="assets/icons.svg#icon-anchor"></use></svg></a></h2><p>The <code>examples/</code> folder is built into <code>docs/</code> and committed; run them locally with <code>npm run dev</code>, or browse the deployed copies at <a href="https://dzyamik.github.io/pixel-perfect/" target="_blank" class="external">https://dzyamik.github.io/pixel-perfect/</a>. Every demo's nav has a &quot;view source&quot; link straight to its <code>main.ts</code>.</p>
 <table>
 <thead>
 <tr>
@@ -35,6 +35,22 @@
 <tr>
 <td>04 — falling debris</td>
 <td>DebrisDetector + dynamic bodies, L-shaped pieces falling</td>
+</tr>
+<tr>
+<td>05 — pixel-perfect sprite</td>
+<td>drag a circle onto a ring + terrain; bbox vs pixel-perfect</td>
+</tr>
+<tr>
+<td>06 — worms-style</td>
+<td>walking circle + grenades that carve and detach cliff slabs</td>
+</tr>
+<tr>
+<td>07 — image-based terrain</td>
+<td>stamp a PNG / canvas alpha mask onto the bitmap, then carve</td>
+</tr>
+<tr>
+<td>08 — sprite playground</td>
+<td>upload your own PNG; cyan outline traces the alpha mask</td>
 </tr>
 </tbody>
 </table>

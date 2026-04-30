@@ -21,7 +21,7 @@ Phaser v4 + Phaser Box2D are both production-ready, but no maintained library ex
 
 ## Live demos
 
-The `examples/` folder is built into `docs/` and committed; run them locally with `npm run dev`, or browse the deployed copies at https://dzyamik.github.io/pixel-perfect/.
+The `examples/` folder is built into `docs/` and committed; run them locally with `npm run dev`, or browse the deployed copies at https://dzyamik.github.io/pixel-perfect/. Every demo's nav has a "view source" link straight to its `main.ts`.
 
 | Demo | What it shows |
 |---|---|
@@ -29,6 +29,10 @@ The `examples/` folder is built into `docs/` and committed; run them locally wit
 | 02 — click to carve | input + carve + per-chunk repaint |
 | 03 — physics colliders | Box2D world, drop balls, debug overlay |
 | 04 — falling debris | DebrisDetector + dynamic bodies, L-shaped pieces falling |
+| 05 — pixel-perfect sprite | drag a circle onto a ring + terrain; bbox vs pixel-perfect |
+| 06 — worms-style | walking circle + grenades that carve and detach cliff slabs |
+| 07 — image-based terrain | stamp a PNG / canvas alpha mask onto the bitmap, then carve |
+| 08 — sprite playground | upload your own PNG; cyan outline traces the alpha mask |
 
 ## Quickstart
 
