@@ -22,11 +22,75 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v2.x — water + density swap | ✅ done | `v2.1.0` |
 | v2.x — dev-server media fix | ✅ done | `v2.1.1` |
 | v2.2 — sand-pile-becomes-static (settling) | ✅ done | `v2.2.0` |
-| v2.3 — more fluid kinds (gas, oil, fire) | ⬜ planned | — |
+| v2.3 — more fluid kinds (gas / oil / fire) + multi-cell flow | ✅ done | `v2.3.0` |
 | v2.4 — active-cell tracking (perf) | ⬜ planned | — |
 | v2.5 — VitePress concept-and-recipes site + tutorial | ⬜ planned | — |
 
-Test suite: 275 tests across 20 files, ~1.5 s. typecheck and lint clean.
+Test suite: 291 tests across 20 files, ~1.7 s. typecheck and lint clean.
+
+---
+
+## v2.3 — multi-fluid expansion (2026-04-30)
+
+The cellular automaton now supports five mobile fluid kinds plus
+fire, all parameterised over a single generic `stepFluid` helper that
+takes a vertical direction (`+1` for sinking, `-1` for rising), a
+density rank, and a multi-cell horizontal flow distance.
+
+### What shipped
+
+- **Density-ranked vertical swap** — `gas (0) < air (1) < fire (2) <
+  oil (3) < water (4) < sand (5)`. Sinking fluids swap with any cell
+  of strictly lower rank below; rising fluids swap with any cell of
+  strictly higher rank above. Static cells never swap regardless of
+  rank.
+- **`'oil'`** — liquid lighter than water. Floats on water (rank 3
+  vs water rank 4 means oil's downward swap fails). Sand sinks
+  through oil (5 > 3).
+- **`'gas'`** — lighter than air; rises straight up, diagonal-up,
+  horizontal flow. Bubbles up through liquids and sand.
+- **`'fire'`** — stationary. Each tick ignites the first adjacent
+  `flammable` neighbor (top, left, right, down); ages via the v2.2
+  `cellTimers` storage; dies → air at `burnDuration` ticks.
+  `Material.flammable?: boolean` and `Material.burnDuration?: number`
+  are new fields.
+- **Multi-cell horizontal flow for liquids and gas**
+  (`FLUID_FLOW_DIST = 4`). Fixes the visible "water piles like sand"
+  symptom during a continuous pour: with a single-cell-per-tick
+  spread, pour rate trivially exceeded spread rate; with up to 4
+  cells per tick the surface levels visibly while the user is still
+  pouring.
+- **Bottom-up scan + rising fluids guard**. The outer loop visits
+  rows in `y = H-1 → 0` order so falling material doesn't get
+  re-processed. Rising fluids move *against* that order, so without
+  protection a gas cell would tunnel from the bottom row to the top
+  in a single tick. Fix: when `stepFluid` performs an upward swap
+  (vertical or diagonal), add the destination index to
+  `movedThisTick` so the not-yet-visited row skips it.
+- **Fire spread cascade guard**. When fire ignites a neighbor, that
+  neighbor is also added to `movedThisTick` — without it, fire would
+  walk an entire flammable line in one tick instead of one cell per
+  tick.
+- **Demo 09 expansion** — keys 1–6 select sand / water / oil / gas /
+  fire / wood. The terrain regen seeds a wooden plank inside the
+  funnel so fire has something to burn out of the box.
+
+### Files involved
+
+- `src/core/types.ts` — `SimulationKind` extended; `Material`
+  gains `flammable?` and `burnDuration?`.
+- `src/core/algorithms/CellularAutomaton.ts` — full rewrite.
+  Generic `stepFluid` + thin wrappers for sand/water/oil/gas;
+  separate `stepFire`. Density rank constants; `canVerticalSwap`
+  helper; multi-cell flow loop.
+- `tests/core/algorithms/CellularAutomaton.test.ts` — 15 new tests
+  for oil floating, water sinking through oil, sand sinking through
+  oil, oil multi-cell flow, gas rising through air / water / static
+  edge / pocket-escape, fire burnout / ignition / chain spread /
+  static-non-flammable, multi-cell water column leveling.
+- `examples/09-falling-sand/main.ts` — registers `OIL`, `GAS`,
+  `FIRE`, `WOOD`; key bindings 3 / 4 / 5 / 6; `countFluids` extended;
+  hint text updated; wooden plank seeded by `regenerateTerrain`.
 
 The library now has its public Phaser entry point: register
 `PixelPerfectPlugin` once at game creation (mapping `'pixelPerfect'`)

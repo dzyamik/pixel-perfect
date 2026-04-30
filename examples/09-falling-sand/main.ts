@@ -1,32 +1,35 @@
 /**
- * Demo 09 — falling sand + water + settled-sand piles + Box2D ball.
+ * Demo 09 — falling sand + multi-fluid sandbox + ball drop.
  *
- * v2's cellular-automaton step in action, with v2.2's bridge between
- * fluid sim and physics: a sand grain that's been at rest for 30
- * ticks (~0.5 s at 60 fps) gets promoted to a `'static'`-simulation
- * variant ("settled sand") that joins the static collider mesh, so
- * the pile starts supporting dynamic bodies.
+ * Showcase for the v2.3 cellular-automaton extensions: density-
+ * ordered swaps across five fluid kinds, multi-cell horizontal flow
+ * for liquids and gases, fire ignition + burn-out, plus the v2.2
+ * sand → settled-sand bridge between fluid sim and physics.
  *
- *  - **sand** falls / slides; sinks through water (density swap on
- *    straight-down moves). Settles after 30 stationary ticks.
- *  - **settled sand** is the static promotion target — slightly
- *    darker tone, generates Box2D colliders. Carve to clear.
- *  - **water** falls / spreads horizontally — pools level off.
- *  - **stone** is plain static terrain (the funnel + floor).
+ *  - **sand**  falls / slides; sinks through water and oil; settles
+ *               after 30 stationary ticks → settled-sand (static).
+ *  - **water** falls / spreads (multi-cell flow); sinks through oil.
+ *  - **oil**   floats on water (rank 3 < water rank 4); spreads.
+ *  - **gas**   bubbles upward through air, water, oil; spreads.
+ *  - **fire**  doesn't move; ignites adjacent flammable cells; dies
+ *               after `burnDuration` ticks.
+ *  - **wood**  static + flammable — fire's preferred fuel.
+ *  - **stone** plain static terrain (the funnel + floor).
+ *  - **settled-sand** static promotion target; generates colliders.
  *
- *   left mouse  → spawn the active fluid at the cursor (drag)
- *   right mouse → carve any static cell (stone or settled sand)
+ *   left mouse  → spawn the active material at the cursor (drag)
+ *   right mouse → carve any static cell (stone, wood, settled sand)
  *   wheel       → resize brush
- *   1 / 2       → switch active fluid (sand / water)
- *   space       → one-shot patch of the active fluid at the top
- *   B           → drop a debris ball — watch it land on settled-sand piles
+ *   1 / 2 / 3 / 4 / 5 / 6
+ *               → switch active material (sand / water / oil / gas / fire / wood)
+ *   space       → one-shot patch of the active material at the top
+ *   B           → drop a debris ball
  *   R           → reset terrain + clear everything
  *
  * `autoSimulate: true` runs one sim tick at the start of every
- * `terrain.update()`. Box2D physics is wired in as well, so the
- * ball drop demonstrates the sim → physics bridge: pour sand into
- * the funnel, wait for it to settle, drop a ball, watch it roll
- * on the pile.
+ * `terrain.update()`. Box2D physics is wired in too, so the ball
+ * drop still demonstrates the sim → physics bridge — pour sand,
+ * wait for it to settle, drop a ball, watch it roll on the pile.
  */
 
 import * as Phaser from 'phaser';
@@ -95,6 +98,58 @@ const WATER: Material = {
     simulation: 'water',
 };
 
+const OIL: Material = {
+    id: 5,
+    name: 'oil',
+    color: 0x2a1f14,
+    density: 0.9,
+    friction: 0.2,
+    restitution: 0,
+    destructible: true,
+    destructionResistance: 0,
+    simulation: 'oil',
+};
+
+const GAS: Material = {
+    id: 6,
+    name: 'gas',
+    color: 0x90b0d0,
+    density: 0.1,
+    friction: 0,
+    restitution: 0,
+    destructible: true,
+    destructionResistance: 0,
+    simulation: 'gas',
+};
+
+const FIRE: Material = {
+    id: 7,
+    name: 'fire',
+    color: 0xff7030,
+    density: 0,
+    friction: 0,
+    restitution: 0,
+    destructible: true,
+    destructionResistance: 0,
+    simulation: 'fire',
+    // ~⅔ s at 60 fps — long enough to walk a flame across a wood
+    // line, short enough that lone flames extinguish quickly.
+    burnDuration: 40,
+};
+
+const WOOD: Material = {
+    id: 8,
+    name: 'wood',
+    color: 0x80502c,
+    density: 1,
+    friction: 0.6,
+    restitution: 0.05,
+    destructible: true,
+    destructionResistance: 0,
+    simulation: 'static',
+    flammable: true,
+};
+
 interface Ball {
     bodyId: BodyId;
     image: Phaser.GameObjects.Image;
@@ -148,7 +203,7 @@ class FallingSandScene extends Phaser.Scene {
             y: this.terrainOriginY,
             worldId: this.worldId,
             pixelsPerMeter: PIXELS_PER_METER,
-            materials: [STONE, SAND, WATER, SETTLED_SAND],
+            materials: [STONE, SAND, WATER, SETTLED_SAND, OIL, GAS, FIRE, WOOD],
             autoSimulate: true,
         });
         this.regenerateTerrain();
@@ -192,12 +247,12 @@ class FallingSandScene extends Phaser.Scene {
         );
         this.input.keyboard?.on('keydown-SPACE', () => this.dumpFluid());
         this.input.keyboard?.on('keydown-R', () => this.regenerateTerrain());
-        this.input.keyboard?.on('keydown-ONE', () => {
-            this.activeFluid = SAND;
-        });
-        this.input.keyboard?.on('keydown-TWO', () => {
-            this.activeFluid = WATER;
-        });
+        this.input.keyboard?.on('keydown-ONE', () => { this.activeFluid = SAND; });
+        this.input.keyboard?.on('keydown-TWO', () => { this.activeFluid = WATER; });
+        this.input.keyboard?.on('keydown-THREE', () => { this.activeFluid = OIL; });
+        this.input.keyboard?.on('keydown-FOUR', () => { this.activeFluid = GAS; });
+        this.input.keyboard?.on('keydown-FIVE', () => { this.activeFluid = FIRE; });
+        this.input.keyboard?.on('keydown-SIX', () => { this.activeFluid = WOOD; });
         this.input.keyboard?.on('keydown-B', () => {
             const p = this.input.activePointer;
             this.spawnBall(p.worldX, p.worldY);
@@ -206,8 +261,8 @@ class FallingSandScene extends Phaser.Scene {
         this.stats = attachStats(this);
         showHint(
             this,
-            'L: fluid · R-click: carve · 1/2: sand/water · space: dump · B: ball · R: reset',
-            7000,
+            'L: paint · R-click: carve · 1-6: sand/water/oil/gas/fire/wood · B: ball · R: reset',
+            8000,
         );
     }
 
@@ -243,6 +298,9 @@ class FallingSandScene extends Phaser.Scene {
             sand: counts.sand,
             settled: counts.settledSand,
             water: counts.water,
+            oil: counts.oil,
+            gas: counts.gas,
+            fire: counts.fire,
             balls: this.balls.length,
         });
     }
@@ -332,9 +390,24 @@ class FallingSandScene extends Phaser.Scene {
         for (let y = HEIGHT - 16; y < HEIGHT; y++) {
             for (let x = 0; x < WIDTH; x++) bm.setPixel(x, y, STONE.id);
         }
+        // Wood plank sitting on the floor. Switch to fire (key 5),
+        // click an air cell adjacent to the plank, and watch it
+        // burn — flame walks the wood and consumes it to air.
+        const plankY0 = HEIGHT - 22;
+        const plankX0 = Math.floor(WIDTH / 2) - 30;
+        for (let y = plankY0; y < HEIGHT - 16; y++) {
+            for (let x = plankX0; x < plankX0 + 60; x++) bm.setPixel(x, y, WOOD.id);
+        }
     }
 
-    private countFluids(): { sand: number; water: number; settledSand: number } {
+    private countFluids(): {
+        sand: number;
+        water: number;
+        settledSand: number;
+        oil: number;
+        gas: number;
+        fire: number;
+    } {
         // Cheap visual stat — iterate the bitmap each frame. For
         // larger worlds this would be tracked via a deposit/remove
         // counter; the 512×256 demo bitmap iterates in well under a
@@ -343,15 +416,21 @@ class FallingSandScene extends Phaser.Scene {
         let sand = 0;
         let water = 0;
         let settledSand = 0;
+        let oil = 0;
+        let gas = 0;
+        let fire = 0;
         for (let y = 0; y < HEIGHT; y++) {
             for (let x = 0; x < WIDTH; x++) {
                 const id = bm.getPixel(x, y);
                 if (id === SAND.id) sand++;
                 else if (id === WATER.id) water++;
                 else if (id === SETTLED_SAND.id) settledSand++;
+                else if (id === OIL.id) oil++;
+                else if (id === GAS.id) gas++;
+                else if (id === FIRE.id) fire++;
             }
         }
-        return { sand, water, settledSand };
+        return { sand, water, settledSand, oil, gas, fire };
     }
 }
 

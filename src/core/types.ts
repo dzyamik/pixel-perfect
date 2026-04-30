@@ -23,22 +23,39 @@ export interface Point {
 /**
  * How a material behaves under the cellular-automaton simulation step.
  *
- * - `'static'` — the material doesn't move on its own. The bitmap state is
- *   only changed by `Carve` / `Deposit` operations or by debris detection.
- *   This is the default for back-compat with v1.x material definitions.
- * - `'sand'` — granular fluid. Falls straight down when blocked, slides
- *   diagonally otherwise. Sinks through `'water'` (density swap on
- *   straight-down moves only). Doesn't move horizontally.
- * - `'water'` — liquid. Falls straight down when blocked, slides
- *   diagonally otherwise; if both fail, spreads horizontally so a
- *   pool levels off over many ticks. Less dense than sand — water
- *   is displaced by falling sand but cannot move into sand cells.
+ * Vertical motion follows a density ordering — heavier sinks, lighter
+ * rises. Density ranks (high → low):
  *
- * Only `'static'` materials generate Box2D colliders. Simulating
- * fluid materials therefore doesn't trigger per-frame physics
- * rebuilds.
+ *     static  >  sand (5)  >  water (4)  >  oil (3)  >  fire (2)
+ *                          >  air  (1)  >  gas (0)
+ *
+ * Two cells of different ranks swap places when doing so brings the
+ * heavier one closer to the floor. `'static'` materials never swap.
+ *
+ * - `'static'` — doesn't move; only `Carve` / `Deposit` / debris
+ *   detection change static cells. Default when omitted (back-compat
+ *   with v1 definitions).
+ * - `'sand'` — granular: falls straight down (swapping into any
+ *   lower-rank fluid), slides diagonally into pure air. Doesn't
+ *   move horizontally.
+ * - `'water'` — liquid: falls straight down (density swap), then
+ *   diagonal-down into air, then horizontal multi-cell flow into
+ *   air. Pools level off over a few ticks.
+ * - `'oil'` — liquid lighter than water: falls into air / gas only
+ *   (rank 3 vs water rank 4 means oil floats on water), otherwise
+ *   spreads horizontally.
+ * - `'gas'` — lighter than air: rises straight up (density swap),
+ *   diagonal-up, horizontal spread. Bubbles up through liquids.
+ * - `'fire'` — doesn't translate. Each tick, ignites one adjacent
+ *   `flammable` neighbor (converting it to fire). After
+ *   `burnDuration` ticks, the cell turns to air. Re-uses the
+ *   per-cell timer storage that `'sand'` settling already lazily
+ *   allocates.
+ *
+ * Only `'static'` materials generate Box2D colliders. Fluid mutations
+ * therefore don't trigger per-frame physics rebuilds.
  */
-export type SimulationKind = 'static' | 'sand' | 'water';
+export type SimulationKind = 'static' | 'sand' | 'water' | 'oil' | 'gas' | 'fire';
 
 /**
  * Description of a material that can occupy a bitmap cell.
@@ -88,6 +105,22 @@ export interface Material {
      */
     settlesTo?: number;
     settleAfterTicks?: number;
+    /**
+     * If `true`, an adjacent `'fire'`-simulation cell can ignite
+     * this material — converting it in-place to the fire material
+     * id. Combine with `'static'` for solid burnables (wood, dry
+     * grass) or with `'oil'` for flammable liquids.
+     *
+     * Defaults to `false` when omitted.
+     */
+    flammable?: boolean;
+    /**
+     * Lifetime in ticks for cells of this material when its
+     * `simulation` is `'fire'`. After this many ticks the cell
+     * turns to air (id `0`). Required for `'fire'` materials;
+     * ignored otherwise. Caps at 255 (the `cellTimers` byte limit).
+     */
+    burnDuration?: number;
 }
 
 /**

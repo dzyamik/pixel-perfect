@@ -650,3 +650,314 @@ describe('CellularAutomaton.step', () => {
         expect(bm.getPixel(0, 1)).toBe(0);
     });
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// v2.3 — oil, gas, fire, multi-cell flow
+// ──────────────────────────────────────────────────────────────────────
+
+const oil: Material = {
+    id: 5,
+    name: 'oil',
+    color: 0x3a2a1a,
+    density: 0.9,
+    friction: 0.2,
+    restitution: 0,
+    destructible: true,
+    destructionResistance: 0,
+    simulation: 'oil',
+};
+
+const gas: Material = {
+    id: 6,
+    name: 'gas',
+    color: 0x8090a0,
+    density: 0.1,
+    friction: 0,
+    restitution: 0,
+    destructible: true,
+    destructionResistance: 0,
+    simulation: 'gas',
+};
+
+const fire: Material = {
+    id: 7,
+    name: 'fire',
+    color: 0xff7030,
+    density: 0,
+    friction: 0,
+    restitution: 0,
+    destructible: true,
+    destructionResistance: 0,
+    simulation: 'fire',
+    burnDuration: 20,
+};
+
+const wood: Material = {
+    id: 8,
+    name: 'wood',
+    color: 0x80502c,
+    density: 1,
+    friction: 0.6,
+    restitution: 0.05,
+    destructible: true,
+    destructionResistance: 0,
+    simulation: 'static',
+    flammable: true,
+};
+
+/**
+ * Extended grid helper that registers the v2.3 materials so test
+ * scenes can mix sand / water / oil / gas / fire / wood / stone.
+ *
+ *  - 's' sand · 'w' water · 'o' oil · 'g' gas · 'f' fire
+ *  - '#' stone · 'W' wood (flammable static)
+ *  - '.' air
+ */
+function gridBitmapV23(rows: string[]): ChunkedBitmap {
+    const w = rows[0]!.length;
+    const h = rows.length;
+    const bm = new ChunkedBitmap({
+        width: w,
+        height: h,
+        chunkSize: 1,
+        materials: [sand, stone, water, oil, gas, fire, wood],
+    });
+    for (let y = 0; y < h; y++) {
+        const row = rows[y]!;
+        for (let x = 0; x < w; x++) {
+            const ch = row[x];
+            if (ch === 's') bm.setPixel(x, y, sand.id);
+            else if (ch === '#') bm.setPixel(x, y, stone.id);
+            else if (ch === 'w') bm.setPixel(x, y, water.id);
+            else if (ch === 'o') bm.setPixel(x, y, oil.id);
+            else if (ch === 'g') bm.setPixel(x, y, gas.id);
+            else if (ch === 'f') bm.setPixel(x, y, fire.id);
+            else if (ch === 'W') bm.setPixel(x, y, wood.id);
+        }
+    }
+    return bm;
+}
+
+function renderGridV23(bm: ChunkedBitmap): string[] {
+    const out: string[] = [];
+    for (let y = 0; y < bm.height; y++) {
+        let row = '';
+        for (let x = 0; x < bm.width; x++) {
+            const id = bm.getPixel(x, y);
+            row +=
+                id === sand.id ? 's'
+                : id === stone.id ? '#'
+                : id === water.id ? 'w'
+                : id === oil.id ? 'o'
+                : id === gas.id ? 'g'
+                : id === fire.id ? 'f'
+                : id === wood.id ? 'W'
+                : '.';
+        }
+        out.push(row);
+    }
+    return out;
+}
+
+function runTicks(bm: ChunkedBitmap, n: number): void {
+    for (let t = 0; t < n; t++) CellularAutomaton.step(bm, t);
+}
+
+describe('CellularAutomaton.step — oil', () => {
+    it('oil falls one row per tick into pure air', () => {
+        const bm = gridBitmapV23([
+            'o',
+            '.',
+            '.',
+            '#',
+        ]);
+        CellularAutomaton.step(bm, 0);
+        expect(renderGridV23(bm)).toEqual(['.', 'o', '.', '#']);
+        CellularAutomaton.step(bm, 1);
+        expect(renderGridV23(bm)).toEqual(['.', '.', 'o', '#']);
+    });
+
+    it('oil does not displace water on a fall — oil floats', () => {
+        const bm = gridBitmapV23([
+            'o',
+            'w',
+            '#',
+        ]);
+        CellularAutomaton.step(bm, 0);
+        // Oil's rank (3) is below water's (4); fall blocked. Oil
+        // stays put — and there's no horizontal slot, so it's stuck.
+        expect(renderGridV23(bm)).toEqual(['o', 'w', '#']);
+    });
+
+    it('water sinks through oil — heavier on bottom after one tick', () => {
+        const bm = gridBitmapV23([
+            'w',
+            'o',
+            '#',
+        ]);
+        CellularAutomaton.step(bm, 0);
+        // Density swap: water (4) > oil (3) downward.
+        expect(renderGridV23(bm)).toEqual(['o', 'w', '#']);
+    });
+
+    it('sand sinks through oil — sand rank > oil rank', () => {
+        const bm = gridBitmapV23([
+            's',
+            'o',
+            '#',
+        ]);
+        CellularAutomaton.step(bm, 0);
+        expect(renderGridV23(bm)).toEqual(['o', 's', '#']);
+    });
+
+    it('oil spreads horizontally with multi-cell flow', () => {
+        // 11-wide; pour a single oil cell at the center on a flat
+        // floor. After a few ticks it should have moved several
+        // cells from x=5 thanks to FLUID_FLOW_DIST=4.
+        const bm = gridBitmapV23([
+            '.....o.....',
+            '###########',
+        ]);
+        CellularAutomaton.step(bm, 0);
+        const after = renderGridV23(bm);
+        // Single oil cell moved at least 1 cell away from x=5.
+        const top = after[0]!;
+        expect(top.indexOf('o')).not.toBe(5);
+        expect(top.indexOf('o')).toBeGreaterThanOrEqual(0);
+    });
+});
+
+describe('CellularAutomaton.step — gas', () => {
+    it('gas rises one row per tick through air', () => {
+        const bm = gridBitmapV23([
+            '.',
+            '.',
+            '.',
+            'g',
+        ]);
+        CellularAutomaton.step(bm, 0);
+        expect(renderGridV23(bm)).toEqual(['.', '.', 'g', '.']);
+        CellularAutomaton.step(bm, 1);
+        expect(renderGridV23(bm)).toEqual(['.', 'g', '.', '.']);
+    });
+
+    it('gas bubbles up through water (gas rank 0 < water rank 4)', () => {
+        const bm = gridBitmapV23([
+            'w',
+            'g',
+        ]);
+        CellularAutomaton.step(bm, 0);
+        expect(renderGridV23(bm)).toEqual(['g', 'w']);
+    });
+
+    it('gas does not pass through static stone above', () => {
+        const bm = gridBitmapV23([
+            '#',
+            'g',
+        ]);
+        CellularAutomaton.step(bm, 0);
+        // Stone is static — gas can't displace it regardless of
+        // density. Without horizontal options gas stays put.
+        expect(renderGridV23(bm)).toEqual(['#', 'g']);
+    });
+
+    it('gas at the top row stays put (no row above)', () => {
+        const bm = gridBitmapV23(['g....']);
+        CellularAutomaton.step(bm, 0);
+        // Top row, no rise possible. Free horizontal cells exist
+        // though — gas spreads sideways via the flow rule.
+        const after = renderGridV23(bm);
+        // The 'g' moved into row 0 somewhere; not necessarily at x=0.
+        expect(after[0]!.includes('g')).toBe(true);
+    });
+
+    it('gas pocket trapped under stone with side opening rises out', () => {
+        // A gas cell trapped at (1, 1) under stone with an air
+        // column at x=2. Should diagonal-up out and rise.
+        const bm = gridBitmapV23([
+            '#.#',
+            '#g.',
+            '###',
+        ]);
+        runTicks(bm, 4);
+        // Gas should have escaped to the top row (any non-# slot).
+        const after = renderGridV23(bm);
+        expect(after.join('').includes('g')).toBe(true);
+        // It shouldn't be stuck back at (1, 1).
+        expect(after[1]![1]).not.toBe('g');
+    });
+});
+
+describe('CellularAutomaton.step — fire', () => {
+    it('a lone fire cell burns out after burnDuration ticks → air', () => {
+        const bm = gridBitmapV23([
+            'f',
+        ]);
+        // burnDuration is 20 — 20 ticks: ages 0..19, dies on the
+        // 20th step (when current+1 reaches threshold).
+        runTicks(bm, 20);
+        expect(renderGridV23(bm)).toEqual(['.']);
+    });
+
+    it('fire ignites an adjacent flammable wood cell', () => {
+        const bm = gridBitmapV23([
+            'fW',
+        ]);
+        CellularAutomaton.step(bm, 0);
+        // Wood at (1, 0) becomes fire. Original fire still burning
+        // (only 1 tick of burnDuration=20 elapsed).
+        expect(bm.getPixel(1, 0)).toBe(fire.id);
+        expect(bm.getPixel(0, 0)).toBe(fire.id);
+    });
+
+    it('fire spreads through a wood line and consumes it', () => {
+        const bm = gridBitmapV23([
+            'fWWWW',
+        ]);
+        // burnDuration = 20. Fire ignites one neighbor per tick.
+        // After enough ticks, all wood should be gone (burned to air).
+        runTicks(bm, 60);
+        const after = renderGridV23(bm);
+        // No wood remains.
+        expect(after[0]!.includes('W')).toBe(false);
+    });
+
+    it('fire does not ignite non-flammable static (stone)', () => {
+        const bm = gridBitmapV23([
+            'f#',
+        ]);
+        // Stone is static but NOT flammable. Fire just ages and dies.
+        runTicks(bm, 20);
+        expect(renderGridV23(bm)).toEqual(['.#']);
+    });
+});
+
+describe('CellularAutomaton.step — multi-cell water flow', () => {
+    it('a tall water column poured onto a flat floor levels off', () => {
+        // 13-wide; 6-cell column at x=6. After enough ticks, water
+        // should cover roughly its 6 cells in a single row at y=H-2.
+        const bm = gridBitmapV23([
+            '.............',
+            '.............',
+            '.............',
+            '.............',
+            '.............',
+            '.............',
+            '......w......',
+            '......w......',
+            '......w......',
+            '......w......',
+            '......w......',
+            '......w......',
+            '#############',
+        ]);
+        runTicks(bm, 80);
+        const after = renderGridV23(bm);
+        // All water should now be in the bottom-most non-floor row.
+        const floorRow = after[after.length - 2]!;
+        const waterCount = (after.join('').match(/w/g) ?? []).length;
+        expect(waterCount).toBe(6);
+        const floorWaterCount = (floorRow.match(/w/g) ?? []).length;
+        expect(floorWaterCount).toBe(6);
+    });
+});

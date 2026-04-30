@@ -4,7 +4,7 @@
 
 ![pixel-perfect — destructible terrain demo](media/hero.gif)
 
-**Status:** `v2.2.0` — stable public surface; cellular-automaton fluid simulation (sand + water) with sand-pile settling bridging fluid sim and Box2D physics. Local development only (not on npm yet).
+**Status:** `v2.3.0` — stable public surface; cellular-automaton fluid simulation now covers sand, water, oil, gas, and fire with density-ranked swaps and multi-cell horizontal flow. Sand-pile settling still bridges fluid sim to Box2D physics; fire ignites flammable materials and burns out via the per-cell timer. Local development only (not on npm yet).
 
 ## What this is
 
@@ -35,7 +35,7 @@ The `examples/` folder is built into `docs/` and committed; run them locally wit
 | 06 — worms-style | walking circle + grenades that carve and detach cliff slabs |
 | 07 — image-based terrain | stamp a PNG / canvas alpha mask onto the bitmap, then carve |
 | 08 — sprite playground | upload your own PNG; cyan outline traces the alpha mask |
-| 09 — falling sand + water + ball | sim + physics bridge: settled sand piles support a dropped Box2D ball |
+| 09 — falling sand sandbox | five fluid kinds (sand / water / oil / gas / fire) + flammable wood + ball drop |
 
 ## Quickstart
 
