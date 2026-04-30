@@ -499,9 +499,15 @@ a neck should drop the shelf as a single rotating L-piece.
   per-chunk collider model under continuous interaction. Camera
   follows the player; G toggles a green-line collider debug
   overlay; R resets.
-- ⬜ Demo 07 — image-based terrain (load a PNG mask, generate
-  matching terrain, demonstrate carving works on it). Roadmap
-  budget ~1.5 days.
+- ✅ **Demo 07 — image-based terrain**
+  (`examples/07-image-terrain/`). Stamps an alpha mask onto the
+  bitmap via `terrain.deposit.fromAlphaTexture`. The source canvas
+  is drawn procedurally at preload (a stylized island with trees)
+  to keep the demo self-contained, but the bridge from "PNG asset"
+  to "destructible terrain" is identical: read the texture's
+  source via `getImageData`, hand it to the deposit op. Two-pass
+  deposit at different alpha thresholds gives multi-material
+  terrain (sand outline + dirt core) from a single image.
 - ⬜ Performance pass on the existing demos / new ones.
 
 The four "phase 3 verification" demos (01–05) cover the basic
