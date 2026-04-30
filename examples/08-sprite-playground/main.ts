@@ -175,6 +175,25 @@ class SpritePlaygroundScene extends Phaser.Scene {
             apply();
         }
 
+        // Rotation slider: dragSprite.rotation is in radians; the
+        // slider is in degrees for human-friendliness. Rotation does
+        // not invalidate the cache (it's evaluated per-overlap
+        // call), but the outline path uses the same transformed
+        // overlap surface, so the cyan trace tracks the rotated
+        // sprite without any extra wiring.
+        const rotSlider = document.getElementById('rotation-slider') as HTMLInputElement | null;
+        const rotReadout = document.getElementById('rotation-readout');
+        if (rotSlider !== null) {
+            rotSlider.value = '0';
+            const apply = () => {
+                const deg = Number.parseFloat(rotSlider.value);
+                this.dragSprite.rotation = (deg * Math.PI) / 180;
+                if (rotReadout !== null) rotReadout.textContent = `${deg.toFixed(0)}°`;
+            };
+            rotSlider.addEventListener('input', apply);
+            apply();
+        }
+
         // Drag-and-drop on the canvas as an alternative to the file
         // picker. Easier when the user is already focused on the demo.
         const root = this.game.canvas.parentElement ?? document.body;
@@ -299,26 +318,19 @@ class SpritePlaygroundScene extends Phaser.Scene {
     }
 
     private aabbOverlap(a: PixelPerfectSprite, b: PixelPerfectSprite): boolean {
-        const ax = a.x - a.displayWidth * a.originX;
-        const ay = a.y - a.displayHeight * a.originY;
-        const bx = b.x - b.displayWidth * b.originX;
-        const by = b.y - b.displayHeight * b.originY;
-        return (
-            ax < bx + b.displayWidth &&
-            ax + a.displayWidth > bx &&
-            ay < by + b.displayHeight &&
-            ay + a.displayHeight > by
-        );
+        // Phaser's getBounds() returns the *rotated* AABB — the
+        // axis-aligned rect enclosing the rotated rectangle, which is
+        // exactly what a naive bounding-box pre-check would look at.
+        return Phaser.Geom.Intersects.RectangleToRectangle(a.getBounds(), b.getBounds());
     }
 
     private aabbOverlapTerrain(s: PixelPerfectSprite, t: DestructibleTerrain): boolean {
-        const sx = s.x - s.displayWidth * s.originX;
-        const sy = s.y - s.displayHeight * s.originY;
+        const sb = s.getBounds();
         return (
-            sx < t.originX + t.bitmap.width &&
-            sx + s.displayWidth > t.originX &&
-            sy < t.originY + t.bitmap.height &&
-            sy + s.displayHeight > t.originY
+            sb.x < t.originX + t.bitmap.width &&
+            sb.x + sb.width > t.originX &&
+            sb.y < t.originY + t.bitmap.height &&
+            sb.y + sb.height > t.originY
         );
     }
 
@@ -328,10 +340,9 @@ class SpritePlaygroundScene extends Phaser.Scene {
         pixelHit: boolean,
     ): void {
         const color = pixelHit ? 0x4ec9b0 : aabbHit ? 0xf2c94c : 0x6e7785;
-        const x = sprite.x - sprite.displayWidth * sprite.originX;
-        const y = sprite.y - sprite.displayHeight * sprite.originY;
+        const b = sprite.getBounds();
         this.overlay.lineStyle(1, color, 0.85);
-        this.overlay.strokeRect(x, y, sprite.displayWidth, sprite.displayHeight);
+        this.overlay.strokeRect(b.x, b.y, b.width, b.height);
     }
 
     private drawTerrainAABB(aabbHit: boolean, pixelHit: boolean): void {
@@ -347,25 +358,36 @@ class SpritePlaygroundScene extends Phaser.Scene {
 
     /**
      * Traces the sprite's alpha mask via `AlphaOverlap.maskToContours`
-     * and renders the contour lines in the supplied color. We use the
-     * sprite's effective (post-flip, post-scale) mask so the outline
-     * tracks whatever the overlap math actually sees — including
-     * runtime `setScale` changes.
+     * and renders the contour lines in the supplied color. Maps each
+     * mask-local point to scene coords via the same rotation/pivot
+     * transform the overlap math uses, so the outline tracks
+     * `setScale` and `setRotation` changes in real time.
      */
     private drawAlphaOutline(sprite: PixelPerfectSprite, color: number): void {
         const mask = sprite.getEffectiveAlphaMask();
-        const x0 = Math.round(sprite.x - sprite.displayWidth * sprite.originX);
-        const y0 = Math.round(sprite.y - sprite.displayHeight * sprite.originY);
         const contours = AlphaOverlap.maskToContours(mask, 0.5);
+        const pivotX = mask.width * sprite.originX;
+        const pivotY = mask.height * sprite.originY;
+        const cos = Math.cos(sprite.rotation);
+        const sin = Math.sin(sprite.rotation);
+        const project = (mx: number, my: number) => {
+            const dx = mx - pivotX;
+            const dy = my - pivotY;
+            return {
+                x: sprite.x + cos * dx - sin * dy,
+                y: sprite.y + sin * dx + cos * dy,
+            };
+        };
+
         this.overlay.lineStyle(1.5, color, 0.95);
         for (const c of contours) {
             if (c.points.length < 2) continue;
             this.overlay.beginPath();
-            const first = c.points[0]!;
-            this.overlay.moveTo(x0 + first.x, y0 + first.y);
+            const first = project(c.points[0]!.x, c.points[0]!.y);
+            this.overlay.moveTo(first.x, first.y);
             for (let i = 1; i < c.points.length; i++) {
-                const p = c.points[i]!;
-                this.overlay.lineTo(x0 + p.x, y0 + p.y);
+                const p = project(c.points[i]!.x, c.points[i]!.y);
+                this.overlay.lineTo(p.x, p.y);
             }
             if (c.closed) this.overlay.closePath();
             this.overlay.strokePath();

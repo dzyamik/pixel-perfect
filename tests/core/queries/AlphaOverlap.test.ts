@@ -3,10 +3,16 @@ import { ChunkedBitmap } from '../../../src/core/ChunkedBitmap.js';
 import {
     alphaSourceToMask,
     maskBitmapOverlap,
+    maskBitmapOverlapTransformed,
     maskMaskOverlap,
+    maskMaskOverlapTransformed,
     maskToContours,
+    transformedMaskBounds,
 } from '../../../src/core/queries/AlphaOverlap.js';
-import type { AlphaMask } from '../../../src/core/queries/AlphaOverlap.js';
+import type {
+    AlphaMask,
+    MaskTransform,
+} from '../../../src/core/queries/AlphaOverlap.js';
 
 /** Build a tiny mask from a `0`/`1` grid string for readable test setup. */
 function gridMask(rows: string[]): AlphaMask {
@@ -214,5 +220,163 @@ describe('maskToContours', () => {
         expect(minY).toBeGreaterThanOrEqual(-0.5);
         expect(maxX).toBeLessThanOrEqual(1.5);
         expect(maxY).toBeLessThanOrEqual(1.5);
+    });
+});
+
+describe('transformedMaskBounds', () => {
+    it('returns the axis-aligned rect for an unrotated transform', () => {
+        const mask = gridMask(['11', '11']);
+        const aabb = transformedMaskBounds(mask, { x: 10, y: 20 });
+        expect(aabb.minX).toBe(10);
+        expect(aabb.minY).toBe(20);
+        expect(aabb.maxX).toBe(12);
+        expect(aabb.maxY).toBe(22);
+    });
+
+    it('expands the AABB when rotated 45° around the center', () => {
+        // 4x4 mask rotated 45° around its center has an AABB of side
+        // 4 * sqrt(2) ≈ 5.66.
+        const mask = gridMask(['1111', '1111', '1111', '1111']);
+        const aabb = transformedMaskBounds(mask, {
+            x: 0,
+            y: 0,
+            pivotX: 2,
+            pivotY: 2,
+            rotation: Math.PI / 4,
+        });
+        const w = aabb.maxX - aabb.minX;
+        const h = aabb.maxY - aabb.minY;
+        expect(w).toBeCloseTo(4 * Math.SQRT2, 5);
+        expect(h).toBeCloseTo(4 * Math.SQRT2, 5);
+    });
+
+    it('rotates 90° CCW correctly (in screen y-down convention)', () => {
+        // 4x2 mask with pivot at (0,0). 90° rotation maps the mask's
+        // local +x axis to the scene's +y axis (sin(π/2) = 1 lands on
+        // sy from sx in the transform formula).
+        const mask = gridMask(['1111', '1111']);
+        const aabb = transformedMaskBounds(mask, {
+            x: 0,
+            y: 0,
+            pivotX: 0,
+            pivotY: 0,
+            rotation: Math.PI / 2,
+        });
+        // Width 4 in mask → height 4 in scene.
+        // Height 2 in mask → width 2 in scene (with negation due to
+        // y-down: it lands on the -x side from the pivot).
+        const w = aabb.maxX - aabb.minX;
+        const h = aabb.maxY - aabb.minY;
+        expect(w).toBeCloseTo(2, 5);
+        expect(h).toBeCloseTo(4, 5);
+    });
+});
+
+describe('maskMaskOverlapTransformed', () => {
+    it('matches the axis-aligned overlap for identity transforms', () => {
+        const a = gridMask(['1111', '1111', '1111', '1111']);
+        const b = gridMask(['1111', '1111', '1111', '1111']);
+        const ta: MaskTransform = { x: 0, y: 0 };
+        const tb: MaskTransform = { x: 2, y: 2 };
+        const expected = maskMaskOverlap(a, ta.x, ta.y, b, tb.x, tb.y);
+        expect(maskMaskOverlapTransformed(a, ta, b, tb)).toBe(expected);
+    });
+
+    it('returns false when rotated AABBs do not overlap', () => {
+        const a = gridMask(['1111', '1111', '1111', '1111']);
+        const b = gridMask(['1111', '1111', '1111', '1111']);
+        const ta: MaskTransform = {
+            x: 0,
+            y: 0,
+            pivotX: 2,
+            pivotY: 2,
+            rotation: Math.PI / 4,
+        };
+        const tb: MaskTransform = {
+            x: 100,
+            y: 100,
+            pivotX: 2,
+            pivotY: 2,
+            rotation: Math.PI / 4,
+        };
+        expect(maskMaskOverlapTransformed(a, ta, b, tb)).toBe(false);
+    });
+
+    it('detects overlap of two rotated masks at a shared point', () => {
+        // Two 6x2 horizontal bars; rotate one by 90° so it becomes
+        // a vertical bar. Place them so they cross at the origin.
+        const bar = gridMask(['111111', '111111']);
+        const horizontal: MaskTransform = { x: -3, y: -1 };
+        const vertical: MaskTransform = {
+            x: 0,
+            y: 0,
+            pivotX: 3,
+            pivotY: 1,
+            rotation: Math.PI / 2,
+        };
+        expect(maskMaskOverlapTransformed(bar, horizontal, bar, vertical)).toBe(true);
+    });
+
+    it('a 180° rotation around the center is geometrically a noop for a symmetric mask', () => {
+        const a = gridMask(['1111', '1111', '1111', '1111']);
+        const ta: MaskTransform = { x: 5, y: 5 };
+        const tbBase: MaskTransform = { x: 7, y: 5 };
+        const tbRotated: MaskTransform = {
+            x: 7 + 2,
+            y: 5 + 2,
+            pivotX: 2,
+            pivotY: 2,
+            rotation: Math.PI,
+        };
+        const expected = maskMaskOverlapTransformed(a, ta, a, tbBase);
+        expect(maskMaskOverlapTransformed(a, ta, a, tbRotated)).toBe(expected);
+    });
+});
+
+describe('maskBitmapOverlapTransformed', () => {
+    it('matches the axis-aligned bitmap overlap for an identity transform', () => {
+        const bitmap = new ChunkedBitmap({ width: 32, height: 32, chunkSize: 32 });
+        bitmap.setPixel(10, 10, 1);
+        const mask = gridMask(['1']);
+        const t: MaskTransform = { x: 10, y: 10 };
+        expect(maskBitmapOverlapTransformed(mask, t, bitmap)).toBe(
+            maskBitmapOverlap(mask, 10, 10, bitmap),
+        );
+    });
+
+    it('rotated mask still hits when its solid pixel covers a bitmap solid cell', () => {
+        const bitmap = new ChunkedBitmap({ width: 32, height: 32, chunkSize: 32 });
+        // Solid 4×4 block in the bitmap at (8..11, 10..13) so we have
+        // a target zone bigger than a single pixel.
+        for (let y = 10; y < 14; y++) {
+            for (let x = 8; x < 12; x++) bitmap.setPixel(x, y, 1);
+        }
+        // 4×1 mask, all solid. Rotated 90° around mask-local (0, 0)
+        // and placed with the pivot at scene (10, 10), the mask's
+        // unit-thick body extends along x=9 from sy=10..13 — well
+        // inside the bitmap solid block.
+        const mask = gridMask(['1111']);
+        const t: MaskTransform = {
+            x: 10,
+            y: 10,
+            pivotX: 0,
+            pivotY: 0,
+            rotation: Math.PI / 2,
+        };
+        expect(maskBitmapOverlapTransformed(mask, t, bitmap)).toBe(true);
+    });
+
+    it('returns false when the rotated mask aims away from solid cells', () => {
+        const bitmap = new ChunkedBitmap({ width: 32, height: 32, chunkSize: 32 });
+        bitmap.setPixel(20, 20, 1);
+        const mask = gridMask(['1']);
+        const t: MaskTransform = {
+            x: 5,
+            y: 5,
+            pivotX: 0,
+            pivotY: 0,
+            rotation: Math.PI / 4,
+        };
+        expect(maskBitmapOverlapTransformed(mask, t, bitmap)).toBe(false);
     });
 });

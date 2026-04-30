@@ -15,12 +15,8 @@ import type { DestructibleTerrain } from './DestructibleTerrain.js';
  * one-byte checks; cheap but not free, so callers that test many pairs
  * should AABB-cull externally first.
  *
- * Limitations:
+ * Behavior:
  *
- *  - **No rotation.** The mask is sampled axis-aligned. A sprite with
- *    `rotation !== 0` produces overlap results computed against an
- *    unrotated bounding mask, which is wrong. Rotating the mask
- *    on-the-fly is a future feature.
  *  - **`flipX` / `flipY`** are honored — index lookup is mirrored when
  *    sampling the mask.
  *  - **Scaling** (`scaleX` / `scaleY`) is honored via nearest-neighbor
@@ -30,6 +26,15 @@ import type { DestructibleTerrain } from './DestructibleTerrain.js';
  *    per cached mask — fine up to 8× for typical sprite sizes; beyond
  *    that consider rendering at native size and scaling the visual
  *    GameObject in some other way.
+ *  - **Rotation** (`rotation`) is honored via per-pixel back-rotation
+ *    in the overlap loop. Unrotated sprites dispatch to the cheaper
+ *    axis-aligned path; sprites with `rotation !== 0` use the
+ *    transformed `AlphaOverlap` variants which add a few muls/adds
+ *    per sample. AABB-cull bounds the work to the rotated bounding
+ *    box's intersection.
+ *
+ * Limitations:
+ *
  *  - **Render textures** as the source image are not supported. Use
  *    standard image / canvas textures.
  *
@@ -65,19 +70,31 @@ export class PixelPerfectSprite extends Phaser.GameObjects.Sprite {
      * Returns `true` iff any solid pixel of this sprite overlaps a
      * solid pixel of `other`.
      *
-     * Both sprites must be unscaled and unrotated. See class doc.
+     * Dispatches to the axis-aligned fast path
+     * (`AlphaOverlap.maskMaskOverlap`) when both sprites have
+     * `rotation === 0`; otherwise uses the transformed variant
+     * which back-rotates each sample point. The cached mask already
+     * accounts for `flipX/Y` and `scaleX/Y`.
      */
     overlapsPixelPerfect(other: PixelPerfectSprite): boolean {
         if (!this.visible || !other.visible) return false;
         const a = this.getAlphaMask();
         const b = other.getAlphaMask();
-        return AlphaOverlap.maskMaskOverlap(
+        if (this.rotation === 0 && other.rotation === 0) {
+            return AlphaOverlap.maskMaskOverlap(
+                a,
+                this.maskWorldX(),
+                this.maskWorldY(),
+                b,
+                other.maskWorldX(),
+                other.maskWorldY(),
+            );
+        }
+        return AlphaOverlap.maskMaskOverlapTransformed(
             a,
-            this.maskWorldX(),
-            this.maskWorldY(),
+            this.maskTransform(a),
             b,
-            other.maskWorldX(),
-            other.maskWorldY(),
+            other.maskTransform(b),
         );
     }
 
@@ -85,23 +102,58 @@ export class PixelPerfectSprite extends Phaser.GameObjects.Sprite {
      * Returns `true` iff any solid pixel of this sprite overlaps a
      * solid bitmap cell of `terrain`.
      *
-     * Coordinates are converted from scene space (where the sprite
-     * lives) to bitmap space (where the terrain stores its pixels)
-     * via the terrain's `originX` / `originY`.
+     * Dispatches to `AlphaOverlap.maskBitmapOverlap` when the sprite
+     * is unrotated; otherwise the transformed variant. Coordinates
+     * are converted from scene space to the terrain's bitmap space
+     * via `terrain.originX` / `terrain.originY`.
      */
     overlapsTerrain(terrain: DestructibleTerrain): boolean {
         if (!this.visible) return false;
         const mask = this.getAlphaMask();
-        const sceneTopLeftX = this.maskWorldX();
-        const sceneTopLeftY = this.maskWorldY();
-        const bitmapX = sceneTopLeftX - terrain.originX;
-        const bitmapY = sceneTopLeftY - terrain.originY;
-        return AlphaOverlap.maskBitmapOverlap(
+        if (this.rotation === 0) {
+            const sceneTopLeftX = this.maskWorldX();
+            const sceneTopLeftY = this.maskWorldY();
+            const bitmapX = sceneTopLeftX - terrain.originX;
+            const bitmapY = sceneTopLeftY - terrain.originY;
+            return AlphaOverlap.maskBitmapOverlap(
+                mask,
+                bitmapX,
+                bitmapY,
+                terrain.bitmap,
+            );
+        }
+        // Rotated: place the mask in **bitmap-local** space (subtract
+        // the terrain's scene origin from the pivot's scene coord).
+        return AlphaOverlap.maskBitmapOverlapTransformed(
             mask,
-            bitmapX,
-            bitmapY,
+            {
+                x: this.x - terrain.originX,
+                y: this.y - terrain.originY,
+                pivotX: mask.width * this.originX,
+                pivotY: mask.height * this.originY,
+                rotation: this.rotation,
+            },
             terrain.bitmap,
         );
+    }
+
+    /**
+     * Builds the {@link AlphaOverlap.MaskTransform} that places the
+     * sprite's cached mask into scene coordinates. The mask is
+     * already post-flip and post-scale (size `displayWidth ×
+     * displayHeight` for the unflipped, unscaled cache, or smaller
+     * if scale < 1), so the pivot in mask-local space is
+     * `mask.width * originX, mask.height * originY` — i.e. the
+     * sprite's origin point inside the (already-scaled) mask.
+     */
+    private maskTransform(mask: AlphaMask): AlphaOverlap.MaskTransform {
+        return {
+            x: this.x,
+            y: this.y,
+            pivotX: mask.width * this.originX,
+            pivotY: mask.height * this.originY,
+            rotation: this.rotation,
+        };
     }
 
     /**
