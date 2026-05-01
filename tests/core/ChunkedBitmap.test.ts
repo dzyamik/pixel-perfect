@@ -389,3 +389,137 @@ describe('ChunkedBitmap active-cell tracking', () => {
         expect(bm.activeCells.size).toBe(0);
     });
 });
+
+describe('ChunkedBitmap mass storage (v3)', () => {
+    const sand: Material = {
+        id: 3,
+        name: 'sand',
+        color: 0xd4b06a,
+        density: 1,
+        friction: 0.5,
+        restitution: 0.05,
+        destructible: true,
+        destructionResistance: 0,
+        simulation: 'sand',
+    };
+    const water: Material = {
+        id: 4,
+        name: 'water',
+        color: 0x4080c0,
+        density: 1,
+        friction: 0,
+        restitution: 0,
+        destructible: true,
+        destructionResistance: 0,
+        simulation: 'water',
+    };
+
+    it('getMass returns 1.0 for any registered material when mass array is uninitialized', () => {
+        const bm = new ChunkedBitmap({
+            width: 4, height: 4, chunkSize: 2, materials: [sand, water],
+        });
+        bm.setPixel(1, 1, sand.id);
+        bm.setPixel(2, 2, water.id);
+        expect(bm.getMass(1, 1)).toBe(1.0);
+        expect(bm.getMass(2, 2)).toBe(1.0);
+    });
+
+    it('getMass returns 0 for air', () => {
+        const bm = new ChunkedBitmap({ width: 4, height: 4, chunkSize: 2 });
+        expect(bm.getMass(0, 0)).toBe(0);
+    });
+
+    it('getMass returns 0 for out-of-bounds coords', () => {
+        const bm = new ChunkedBitmap({ width: 4, height: 4, chunkSize: 2 });
+        expect(bm.getMass(-1, 0)).toBe(0);
+        expect(bm.getMass(4, 0)).toBe(0);
+        expect(bm.getMass(0, -1)).toBe(0);
+        expect(bm.getMass(0, 4)).toBe(0);
+    });
+
+    it('setPixel(non-air) sets mass to 1.0 once mass array is initialized', () => {
+        const bm = new ChunkedBitmap({
+            width: 4, height: 4, chunkSize: 2, materials: [water],
+        });
+        // Trigger lazy alloc by calling setMass once.
+        bm.setMass(0, 0, 0.5, water.id);
+        // Now setPixel writes mass=1.0.
+        bm.setPixel(1, 1, water.id);
+        expect(bm.getMass(1, 1)).toBe(1.0);
+    });
+
+    it('setPixel(air) sets mass to 0 once mass array is initialized', () => {
+        const bm = new ChunkedBitmap({
+            width: 4, height: 4, chunkSize: 2, materials: [water],
+        });
+        bm.setMass(1, 1, 0.7, water.id);
+        bm.setPixel(1, 1, 0);
+        expect(bm.getMass(1, 1)).toBe(0);
+    });
+
+    it('setMass updates the cell mass', () => {
+        const bm = new ChunkedBitmap({
+            width: 4, height: 4, chunkSize: 2, materials: [water],
+        });
+        bm.setPixel(2, 2, water.id);
+        bm.setMass(2, 2, 0.5);
+        expect(bm.getMass(2, 2)).toBeCloseTo(0.5);
+        expect(bm.getPixel(2, 2)).toBe(water.id);
+    });
+
+    it('setMass(0) clears the cell to air', () => {
+        const bm = new ChunkedBitmap({
+            width: 4, height: 4, chunkSize: 2, materials: [water],
+        });
+        bm.setPixel(2, 2, water.id);
+        bm.setMass(2, 2, 0);
+        expect(bm.getMass(2, 2)).toBe(0);
+        expect(bm.getPixel(2, 2)).toBe(0);
+    });
+
+    it('setMass on an air cell with idIfAir adopts that id', () => {
+        const bm = new ChunkedBitmap({
+            width: 4, height: 4, chunkSize: 2, materials: [water],
+        });
+        // Cell starts as air. Pour 0.3 mass of water into it.
+        bm.setMass(2, 2, 0.3, water.id);
+        expect(bm.getPixel(2, 2)).toBe(water.id);
+        expect(bm.getMass(2, 2)).toBeCloseTo(0.3);
+    });
+
+    it('setMass with mass>1.0 is allowed (compressed cell)', () => {
+        const bm = new ChunkedBitmap({
+            width: 4, height: 4, chunkSize: 2, materials: [water],
+        });
+        bm.setPixel(1, 1, water.id);
+        bm.setMass(1, 1, 1.02);
+        expect(bm.getMass(1, 1)).toBeCloseTo(1.02);
+    });
+
+    it('setMass marks the chunk dirty', () => {
+        const bm = new ChunkedBitmap({
+            width: 4, height: 4, chunkSize: 2, materials: [water],
+        });
+        bm.setPixel(0, 0, water.id);
+        const chunk = bm.getChunk(0, 0);
+        bm.clearDirty(chunk);
+        bm.clearVisualDirty(chunk);
+        bm.setMass(0, 0, 0.5);
+        expect(chunk.dirty).toBe(true);
+        expect(chunk.visualDirty).toBe(true);
+    });
+
+    it('setMass throws on out-of-bounds coords', () => {
+        const bm = new ChunkedBitmap({ width: 4, height: 4, chunkSize: 2 });
+        expect(() => bm.setMass(-1, 0, 0.5)).toThrow();
+        expect(() => bm.setMass(0, -1, 0.5)).toThrow();
+        expect(() => bm.setMass(4, 0, 0.5)).toThrow();
+        expect(() => bm.setMass(0, 4, 0.5)).toThrow();
+    });
+
+    it('setMass throws on non-finite mass', () => {
+        const bm = new ChunkedBitmap({ width: 4, height: 4, chunkSize: 2 });
+        expect(() => bm.setMass(0, 0, NaN)).toThrow();
+        expect(() => bm.setMass(0, 0, Infinity)).toThrow();
+    });
+});

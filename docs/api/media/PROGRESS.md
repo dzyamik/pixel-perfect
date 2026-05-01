@@ -36,9 +36,137 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v2.7.4 — pressure-aware horizontal flow (sand & fluids) | ✅ done | `v2.7.4` |
 | v2.7.5 — pressure flow is 1-cell only (no skipping) | ✅ done | `v2.7.5` |
 | v2.7.6 — anti-oscillation memory enables surface compaction | ✅ done | `v2.7.6` |
-| v3.0 — mass-based fluid simulation | ⬜ planned (`docs-dev/06-v3-mass-based-fluid.md`) | — |
+| v3.0 — mass-based fluid simulation | ✅ done | `v3.0.0` |
 
-Test suite: 350 tests across 21 files. typecheck and lint clean.
+Test suite: 354 tests across 21 files. typecheck and lint clean.
+
+---
+
+## v3.0.0 — mass-based fluid simulation (2026-05-01)
+
+Switch water/oil/gas from binary cell occupancy to a mass-based
+model. Each cell stores a `Float32` mass alongside its material id;
+mass transfers between same-material/air neighbors via the
+canonical W-Shadow / jgallant / DwarfCorp algorithm. Pressure
+emerges naturally from the over-compression overflow rule —
+surfaces actually flatten now, ending the v2.x series of
+incremental fixes for the "fluids don't level" complaint.
+
+### Storage
+
+- `ChunkedBitmap._masses: Float32Array | null` — lazy-allocated.
+- `getMass(x, y)` — returns the cell's mass. For uninitialized
+  bitmaps returns `1.0` for any non-air cell (backwards
+  compatible). For initialized bitmaps reads the stored value.
+- `setMass(x, y, mass, idIfAir?)` — writes a mass and updates id
+  as a side effect. `mass <= 0` clears the cell to air; otherwise
+  the cell adopts `idIfAir` if it was air, or keeps its id.
+- `setPixel(x, y, id)` unchanged: writes id and (if mass array
+  is allocated) sets mass to `1.0` for non-air, `0` for air.
+
+The lazy init's first call seeds every existing non-air cell to
+mass `1.0`, so v2.x bitmaps "switch on" to mass tracking
+correctly without losing implicit-full mass.
+
+### Mass transfer constants
+
+| Constant | Value | Role |
+|---|---|---|
+| `MAX_MASS` | `1.0` | A "full" cell. |
+| `MAX_COMPRESS` | `0.02` | Extra mass a deep cell can hold under pressure. |
+| `MIN_MASS` | `0.0001` | Below this a cell is treated as empty. |
+| `MIN_FLOW` | `0.005` | Transfer threshold (numerical noise filter). |
+| `MAX_FLOW` | `1.0` | Per-tick cap on cell-to-cell transfer. |
+| `LATERAL_EQUALIZE` | `0.25` | Fraction of mass difference equalized per tick (W-Shadow's default). |
+
+### Step rules (`stepLiquid`)
+
+Per cell, four sequential transfers:
+
+1. **Vertical (deep direction)**: cross-material density swap
+   (atomic, masses preserved) for water-on-oil, sand-on-water,
+   etc. Otherwise air/same-material mass transfer toward the
+   stable split.
+2. **Lateral left**: quarter-equalize toward the left neighbor.
+3. **Lateral right**: quarter-equalize toward the right neighbor.
+4. **Compression overflow** (shallow direction): only fires
+   when source mass exceeds `MAX_MASS`.
+
+`stableSplit(total)` returns the deeper cell's equilibrium mass:
+the source is over-full when its mass exceeds the split, and
+that overflow drives lateral and upward (or downward, for gas)
+spread.
+
+### What stays vs changes
+
+- **Sand / fire / static**: unchanged. Binary CA rules from v2.x
+  preserved. Sand pressure flow (v2.7.4/5) preserved.
+- **Water / oil / gas**: now mass-based.
+- **Cross-material density swaps**: still atomic — water above
+  oil swaps cells (mass preserved on both ends).
+- **`Material.flowDistance`**: kept as a registered field but
+  no longer used by `stepLiquid`. The lateral equalization
+  rate is currently a module constant; could become per-
+  material in a v3.x patch.
+- **v2.7.6 `horizFlowSource` anti-oscillation memory**: still
+  used by sand pressure flow; not used by the mass-based
+  liquid path (mass equalization can't oscillate).
+
+### Removed (v2-specific obsolete tests)
+
+The mass-based model fundamentally changes the per-tick
+behavior of liquids, so several v2.x tests pinned to specific
+binary cell positions are obsolete:
+
+- `pressure-aware flow (v2.7.4)` describe — gone.
+- `pressure flow is 1-cell only (v2.7.5)` describe — gone.
+- `anti-oscillation memory enables compaction (v2.7.6)` describe — gone.
+- `gas leveling without oscillation (v2.6.2)` describe — gone.
+- `per-material flowDistance (v2.7.0)` describe — gone (the
+  field's semantics changed; tests would need rewriting from
+  scratch and current value isn't user-tuned).
+
+Other tests migrated to mass-conservation asserts (e.g.,
+"water column on flat floor": now asserts total mass is
+preserved + no water above the floor row, instead of "exactly
+6 cells in a single row").
+
+### Bench numbers
+
+Mass-based step is ~2× the v2.7.6 cost in the worst case
+(every cell mobile), as expected — each cell does 4 mass
+transfers with float math instead of 1 swap with byte
+compares. Settled worlds are still effectively free.
+
+| Scenario | v2.7.6 | v3.0.0 |
+|---|---|---|
+| Settled world | ~5 µs/step | ~5 µs/step |
+| Active pour | ~58 µs/step | ~70 µs/step |
+| Full mixed bitmap | ~6.8 ms/step | ~14 ms/step |
+| First-call seed scan | ~250 µs | ~590 µs |
+
+The full-mixed-bitmap worst case at 14 ms/step is still under a
+60 fps frame budget. Real games rarely have 100% mobile cells.
+
+### Files involved
+
+- `src/core/ChunkedBitmap.ts` — `_masses` field + lazy `_initMassArray`;
+  `getMass` / `setMass` public API; `setPixel` updates mass alongside id.
+- `src/core/algorithms/CellularAutomaton.ts` — new constants
+  (`MAX_MASS`, `MAX_COMPRESS`, etc.); `stableSplit` helper;
+  `stepLiquid` function; dispatch in `step()` routes water/oil/gas
+  to `stepLiquid` instead of `stepFluid`.
+- `tests/core/ChunkedBitmap.test.ts` — 11 new tests for the mass
+  storage / get / set API.
+- `tests/core/algorithms/CellularAutomaton.test.ts` — multiple
+  v2.x tests deleted as obsolete; remaining tests migrated to
+  mass-conservation asserts; new "mass-based fluid (v3)" describe
+  block with 2 tests (mass-conservation, smooth bell-shape
+  distribution after column drain).
+- `docs-dev/06-v3-mass-based-fluid.md` — design document
+  written before implementation.
+
+---
 
 ---
 

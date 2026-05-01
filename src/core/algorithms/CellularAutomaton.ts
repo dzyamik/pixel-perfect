@@ -127,20 +127,11 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
         if (kind === 'sand') {
             stepSand(bitmap, materials, x, y, id, W, H, goRight, movedThisTick);
         } else if (kind === 'water') {
-            stepFluid(
-                bitmap, materials, x, y, id, W, H, goRight, movedThisTick,
-                +1, RANK_WATER, material.flowDistance ?? DEFAULT_FLUID_FLOW_DIST,
-            );
+            stepLiquid(bitmap, materials, x, y, id, W, H, +1, RANK_WATER);
         } else if (kind === 'oil') {
-            stepFluid(
-                bitmap, materials, x, y, id, W, H, goRight, movedThisTick,
-                +1, RANK_OIL, material.flowDistance ?? DEFAULT_FLUID_FLOW_DIST,
-            );
+            stepLiquid(bitmap, materials, x, y, id, W, H, +1, RANK_OIL);
         } else if (kind === 'gas') {
-            stepFluid(
-                bitmap, materials, x, y, id, W, H, goRight, movedThisTick,
-                -1, RANK_GAS, material.flowDistance ?? DEFAULT_FLUID_FLOW_DIST,
-            );
+            stepLiquid(bitmap, materials, x, y, id, W, H, -1, RANK_GAS);
         } else if (kind === 'fire') {
             stepFire(bitmap, materials, x, y, id, material, W, H, movedThisTick);
         }
@@ -155,19 +146,185 @@ const RANK_OIL = 3;
 const RANK_WATER = 4;
 const RANK_SAND = 5;
 
+// Note: the v2.x `DEFAULT_FLUID_FLOW_DIST = 4` constant was removed
+// at v3.0. Water / oil / gas now use mass transfer via
+// {@link stepLiquid}; horizontal flow distance is no longer a
+// per-tick cell count. Sand still calls `stepFluid` with `flowDist=0`
+// (no horizontal flow); sand's pressure-mode flow is hard-coded to
+// 1 in {@link stepSand}.
+
+// ──────────────────────────────────────────────────────────────────
+// v3 mass-based liquid simulation
+// ──────────────────────────────────────────────────────────────────
+
+/** Standard cell capacity. A "full" cell holds exactly this much. */
+const MAX_MASS = 1.0;
 /**
- * Default multi-cell horizontal flow distance used when a fluid
- * material doesn't supply its own `flowDistance`. A liquid cell
- * that's blocked vertically can move up to this many empty (air)
- * cells sideways in a single tick — without it, a wide pool would
- * take O(width) ticks to level visibly because each cell only
- * spreads by 1 column per tick. Higher = more "responsive"
- * liquids; lower = more granular look. `4` is a balance for
- * water-like fluids; per-material overrides via
- * `Material.flowDistance` are recommended (lava: 2, oil: 3,
- * water: 4, gas: 6).
+ * Extra mass a bottom-of-stack cell can hold before overflowing
+ * upward. The implicit pressure model — taller stacks accumulate
+ * proportionally more compression at the base, which the lateral
+ * and upward equalization rules then redistribute. W-Shadow's
+ * default; tunable.
  */
-const DEFAULT_FLUID_FLOW_DIST = 4;
+const MAX_COMPRESS = 0.02;
+/** Below this mass a cell is considered empty and reverts to air. */
+const MIN_MASS = 0.0001;
+/** Below this transfer amount the move is suppressed (numerical noise). */
+const MIN_FLOW = 0.005;
+/** Maximum mass that can transfer between two cells in a single tick. */
+const MAX_FLOW = 1.0;
+/**
+ * Lateral equalization fraction — fraction of the mass difference
+ * between two same-rank neighbors that flows from heavier to
+ * lighter per tick. `1/4` is W-Shadow's default; tighter values
+ * cause visible jitter at the spreading front, looser values
+ * make spreading sluggish.
+ */
+const LATERAL_EQUALIZE = 0.25;
+
+/**
+ * Given two stacked cells with combined mass `total`, returns
+ * how much the BOTTOM cell should hold at equilibrium. The rest
+ * goes into the upper cell. Implements W-Shadow's pseudo-
+ * compressible split:
+ *
+ *  - `total ≤ MAX_MASS`: all mass sits at the bottom.
+ *  - `total < 2·MAX_MASS + MAX_COMPRESS`: a smooth ramp where
+ *    the bottom is over-full and the top is partial.
+ *  - Larger totals: bottom holds half plus the compression bonus.
+ */
+function stableSplit(total: number): number {
+    if (total <= MAX_MASS) return total;
+    if (total < 2 * MAX_MASS + MAX_COMPRESS) {
+        return (MAX_MASS * MAX_MASS + total * MAX_COMPRESS) / (MAX_MASS + MAX_COMPRESS);
+    }
+    return (total + MAX_COMPRESS) / 2;
+}
+
+/**
+ * Mass-based liquid step (v3).
+ *
+ * Replaces {@link stepFluid} for `'water'`, `'oil'`, and `'gas'`
+ * materials. Each cell runs four sequential transfers:
+ *
+ *  1. Vertical (sinking direction): cross-material density swap
+ *     OR same-material/air mass transfer toward the stable split.
+ *  2. Lateral left: quarter-equalize toward the left neighbor.
+ *  3. Lateral right: quarter-equalize toward the right neighbor.
+ *  4. Vertical up (compression overflow): only fires when source
+ *     mass exceeds `MAX_MASS`.
+ *
+ * For sinking fluids (`yDir = +1`) the natural-deep direction is
+ * down; for rising gas (`yDir = -1`) the directions invert (mass
+ * transfers UP, compression overflows DOWN). Cross-material
+ * density swaps still operate on whole cells (atomic
+ * `setPixel` swap with mass preserved).
+ *
+ * The transfer logic is in-place: each cell modifies its own
+ * mass and its target's mass directly. This is order-dependent
+ * (per W-Shadow's published algorithm), but the bottom-up scan
+ * order from the outer loop and the small per-tick flow caps
+ * keep the visible result stable.
+ */
+function stepLiquid(
+    bitmap: ChunkedBitmap,
+    materials: MaterialRegistry,
+    x: number,
+    y: number,
+    id: number,
+    W: number,
+    H: number,
+    yDir: number,
+    srcRank: number,
+): void {
+    let remaining = bitmap.getMass(x, y);
+    if (remaining < MIN_MASS) return;
+
+    // 1. Vertical move toward the natural-deep direction (down
+    //    for sinking fluids via `yDir = +1`, up for gas via
+    //    `yDir = -1`). The "deep" cell is always at `ny` — it's
+    //    where mass accumulates regardless of direction. The
+    //    stable-split function applies symmetrically.
+    const ny = y + yDir;
+    if (ny >= 0 && ny < H) {
+        const targetId = bitmap.getPixel(x, ny);
+        if (targetId !== id && targetId !== 0) {
+            // Different non-air material in the deep direction:
+            // try a cross-material density swap. Atomic — masses
+            // preserved on both ends.
+            if (canVerticalSwap(srcRank, targetId, materials, yDir)) {
+                const targetMass = bitmap.getMass(x, ny);
+                bitmap.setPixel(x, ny, id);
+                bitmap.setMass(x, ny, remaining);
+                bitmap.setPixel(x, y, targetId);
+                bitmap.setMass(x, y, targetMass, targetId);
+                return;
+            }
+        } else {
+            // Air or same-material at deep: mass transfer toward
+            // stable split. The deep cell should hold
+            // `stableSplit(total)`; the rest stays at source.
+            const targetMass = bitmap.getMass(x, ny);
+            const total = remaining + targetMass;
+            const targetEquilibrium = stableSplit(total);
+            let flow = targetEquilibrium - targetMass;
+            if (flow > MAX_FLOW) flow = MAX_FLOW;
+            if (flow > remaining) flow = remaining;
+            if (flow > MIN_FLOW) {
+                bitmap.setMass(x, ny, targetMass + flow, id);
+                remaining -= flow;
+                bitmap.setMass(x, y, remaining);
+                if (remaining < MIN_MASS) return;
+            }
+        }
+    }
+
+    // 2 + 3. Lateral equalization (left and right). Each side
+    // independently quarter-equalizes toward the neighbor.
+    for (const sx of [-1, 1]) {
+        if (remaining < MIN_MASS) break;
+        const nx = x + sx;
+        if (nx < 0 || nx >= W) continue;
+        const targetId = bitmap.getPixel(nx, y);
+        if (targetId !== id && targetId !== 0) continue;
+        const targetMass = bitmap.getMass(nx, y);
+        const diff = remaining - targetMass;
+        if (diff <= 0) continue;
+        let flow = diff * LATERAL_EQUALIZE;
+        if (flow > MAX_FLOW) flow = MAX_FLOW;
+        if (flow > remaining) flow = remaining;
+        if (flow > MIN_FLOW) {
+            bitmap.setMass(nx, y, targetMass + flow, id);
+            remaining -= flow;
+            bitmap.setMass(x, y, remaining);
+        }
+    }
+
+    // 4. Compression overflow toward the natural-shallow direction
+    //    (up for sinking fluids, down for rising gas).
+    if (remaining > MAX_MASS) {
+        const upY = y - yDir;
+        if (upY >= 0 && upY < H) {
+            const targetId = bitmap.getPixel(x, upY);
+            if (targetId === id || targetId === 0) {
+                const targetMass = bitmap.getMass(x, upY);
+                const total = remaining + targetMass;
+                // The "deeper" side should hold `stableSplit(total)`.
+                // We are the deeper side, so we should hold that
+                // amount and overflow the rest upward.
+                const sourceEquilibrium = stableSplit(total);
+                let flow = remaining - sourceEquilibrium;
+                if (flow > MAX_FLOW) flow = MAX_FLOW;
+                if (flow > remaining) flow = remaining;
+                if (flow > MIN_FLOW) {
+                    bitmap.setMass(x, upY, targetMass + flow, id);
+                    remaining -= flow;
+                    bitmap.setMass(x, y, remaining);
+                }
+            }
+        }
+    }
+}
 
 /**
  * Returns the density rank for a cell's contents.

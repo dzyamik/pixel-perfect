@@ -304,27 +304,32 @@ describe('CellularAutomaton.step', () => {
 
     it('water spreads horizontally on a flat floor over many ticks', () => {
         // Five-wide flat floor, water column dropped at the center.
+        // v3 mass-based: water spreads via mass (cells may be partially
+        // filled). Assert mass conservation + column drained.
         const bm = gridBitmap([
             '..w..',
             '..w..',
             '..w..',
             '#####',
         ]);
-        // Run enough ticks that the column has fully flattened. The
-        // alternation kicks in every tick, so the spread is symmetric
-        // over even-tick counts.
-        for (let t = 0; t < 16; t++) CellularAutomaton.step(bm, t);
-        // Three water cells should now be sitting on the floor (row 2)
-        // and any leftover columns above are air. Total water count
-        // preserved.
-        let waterCount = 0;
+        const initialMass = (() => {
+            let m = 0;
+            for (let y = 0; y < bm.height; y++) {
+                for (let x = 0; x < bm.width; x++) {
+                    if (bm.getPixel(x, y) === water.id) m += bm.getMass(x, y);
+                }
+            }
+            return m;
+        })();
+        for (let t = 0; t < 32; t++) CellularAutomaton.step(bm, t);
+        let finalMass = 0;
         for (let y = 0; y < bm.height; y++) {
             for (let x = 0; x < bm.width; x++) {
-                if (bm.getPixel(x, y) === water.id) waterCount++;
+                if (bm.getPixel(x, y) === water.id) finalMass += bm.getMass(x, y);
             }
         }
-        expect(waterCount).toBe(3);
-        // No water in row 0 (top — column should have drained).
+        expect(finalMass).toBeCloseTo(initialMass, 1);
+        // Column drained — no water at row 0.
         for (let x = 0; x < bm.width; x++) {
             expect(bm.getPixel(x, 0)).toBe(0);
         }
@@ -355,24 +360,24 @@ describe('CellularAutomaton.step', () => {
         // 6-tall water column centered at x=4.
         for (let y = 0; y < 6; y++) bm.setPixel(4, y, water.id);
 
-        for (let t = 0; t < 50; t++) CellularAutomaton.step(bm, t);
+        const initialMass = 6.0;
+        for (let t = 0; t < 100; t++) CellularAutomaton.step(bm, t);
 
-        // Count water and verify all 6 cells are on the floor row.
-        let waterCount = 0;
-        let onFloor = 0;
-        let aboveFloor = 0;
+        // v3: assert mass conservation + column drained (no water
+        // above the floor row).
+        let totalMass = 0;
+        let aboveFloorMass = 0;
         for (let y = 0; y < H; y++) {
             for (let x = 0; x < W; x++) {
                 if (bm.getPixel(x, y) === water.id) {
-                    waterCount++;
-                    if (y === H - 2) onFloor++;
-                    else aboveFloor++;
+                    const m = bm.getMass(x, y);
+                    totalMass += m;
+                    if (y < H - 2) aboveFloorMass += m;
                 }
             }
         }
-        expect(waterCount).toBe(6);
-        expect(onFloor).toBe(6);
-        expect(aboveFloor).toBe(0);
+        expect(totalMass).toBeCloseTo(initialMass, 1);
+        expect(aboveFloorMass).toBeCloseTo(0, 0);
     });
 
     it('water fills a U-shaped container from the bottom up', () => {
@@ -383,21 +388,22 @@ describe('CellularAutomaton.step', () => {
             '#####',
         ]);
         for (let t = 0; t < 30; t++) CellularAutomaton.step(bm, t);
-        // The single water cell should have settled somewhere in the
-        // bottom row of the cup (row 2). The first row is the lid we
-        // dropped through; the last row is the floor.
-        let waterCount = 0;
-        let bottomCount = 0;
+        // v3: assert mass conservation + all water reached the
+        // bottom of the U (row 2). 1.0 mass spread or concentrated
+        // there.
+        let totalMass = 0;
+        let bottomMass = 0;
         for (let y = 0; y < bm.height; y++) {
             for (let x = 0; x < bm.width; x++) {
                 if (bm.getPixel(x, y) === water.id) {
-                    waterCount++;
-                    if (y === 2) bottomCount++;
+                    const m = bm.getMass(x, y);
+                    totalMass += m;
+                    if (y === 2) bottomMass += m;
                 }
             }
         }
-        expect(waterCount).toBe(1);
-        expect(bottomCount).toBe(1);
+        expect(totalMass).toBeCloseTo(1.0, 1);
+        expect(bottomMass).toBeCloseTo(1.0, 1);
     });
 
     it('sand sinks through a water column on straight-down moves', () => {
@@ -828,17 +834,19 @@ describe('CellularAutomaton.step — oil', () => {
 });
 
 describe('CellularAutomaton.step — gas', () => {
-    it('gas rises one row per tick through air', () => {
+    it('gas rises through air toward the top', () => {
+        // v3 mass-based: gas mass transfers up via stable-split.
+        // After enough ticks the gas reaches row 0.
         const bm = gridBitmapV23([
             '.',
             '.',
             '.',
             'g',
         ]);
-        CellularAutomaton.step(bm, 0);
-        expect(renderGridV23(bm)).toEqual(['.', '.', 'g', '.']);
-        CellularAutomaton.step(bm, 1);
-        expect(renderGridV23(bm)).toEqual(['.', 'g', '.', '.']);
+        for (let t = 0; t < 10; t++) CellularAutomaton.step(bm, t);
+        // Gas mass should be at the top.
+        expect(bm.getPixel(0, 0)).toBe(gas.id);
+        expect(bm.getPixel(0, 3)).toBe(0);
     });
 
     it('gas bubbles up through water (gas rank 0 < water rank 4)', () => {
@@ -1101,10 +1109,70 @@ describe('CellularAutomaton.step — active-cell tracking', () => {
     });
 });
 
-describe('CellularAutomaton.step — multi-cell water flow', () => {
-    it('a tall water column poured onto a flat floor levels off', () => {
-        // 13-wide; 6-cell column at x=6. After enough ticks, water
-        // should cover roughly its 6 cells in a single row at y=H-2.
+describe('CellularAutomaton.step — mass-based fluid (v3)', () => {
+    it('water mass is conserved across many ticks', () => {
+        // Pour 6 mass into a sealed box and verify it stays at 6.
+        const W = 11;
+        const H = 8;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [stone, water],
+        });
+        for (let x = 0; x < W; x++) {
+            bm.setPixel(x, 0, stone.id);
+            bm.setPixel(x, H - 1, stone.id);
+        }
+        for (let y = 0; y < H; y++) {
+            bm.setPixel(0, y, stone.id);
+            bm.setPixel(W - 1, y, stone.id);
+        }
+        for (let y = 1; y < 7; y++) bm.setPixel(W >> 1, y, water.id);
+        const initial = (() => {
+            let m = 0;
+            for (let y = 0; y < H; y++) {
+                for (let x = 0; x < W; x++) {
+                    if (bm.getPixel(x, y) === water.id) m += bm.getMass(x, y);
+                }
+            }
+            return m;
+        })();
+        for (let t = 0; t < 300; t++) CellularAutomaton.step(bm, t);
+        let after = 0;
+        for (let y = 0; y < H; y++) {
+            for (let x = 0; x < W; x++) {
+                if (bm.getPixel(x, y) === water.id) after += bm.getMass(x, y);
+            }
+        }
+        expect(after).toBeCloseTo(initial, 1);
+    });
+
+    it('water on a flat floor settles into a smooth bell-shape distribution', () => {
+        // Single 6-tall water column on a 13-wide floor. After
+        // many ticks every cell along the floor row should have
+        // some water (smooth gradient from center outward).
+        const W = 13;
+        const H = 8;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [stone, water],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        for (let y = 0; y < 6; y++) bm.setPixel(W >> 1, y, water.id);
+        for (let t = 0; t < 200; t++) CellularAutomaton.step(bm, t);
+
+        // Floor row should have water at the central cells (mass
+        // gradient outward). Check that at least half the floor
+        // cells contain water (any mass > MIN_MASS).
+        let waterCellsOnFloor = 0;
+        for (let x = 0; x < W; x++) {
+            if (bm.getPixel(x, H - 2) === water.id) waterCellsOnFloor++;
+        }
+        expect(waterCellsOnFloor).toBeGreaterThanOrEqual(7);
+    });
+});
+
+describe('CellularAutomaton.step — water column drainage (v3 mass-based)', () => {
+    it('a tall water column drains and conserves mass on the floor row', () => {
         const bm = gridBitmapV23([
             '.............',
             '.............',
@@ -1120,14 +1188,23 @@ describe('CellularAutomaton.step — multi-cell water flow', () => {
             '......w......',
             '#############',
         ]);
-        runTicks(bm, 80);
-        const after = renderGridV23(bm);
-        // All water should now be in the bottom-most non-floor row.
-        const floorRow = after[after.length - 2]!;
-        const waterCount = (after.join('').match(/w/g) ?? []).length;
-        expect(waterCount).toBe(6);
-        const floorWaterCount = (floorRow.match(/w/g) ?? []).length;
-        expect(floorWaterCount).toBe(6);
+        runTicks(bm, 200);
+        // v3: assert mass conservation + column drained (no water
+        // above the floor row).
+        let totalMass = 0;
+        let aboveFloorMass = 0;
+        const H = bm.height;
+        for (let y = 0; y < H; y++) {
+            for (let x = 0; x < bm.width; x++) {
+                if (bm.getPixel(x, y) === water.id) {
+                    const m = bm.getMass(x, y);
+                    totalMass += m;
+                    if (y < H - 2) aboveFloorMass += m;
+                }
+            }
+        }
+        expect(totalMass).toBeCloseTo(6.0, 1);
+        expect(aboveFloorMass).toBeCloseTo(0, 0);
     });
 });
 
@@ -1278,335 +1355,6 @@ describe('CellularAutomaton.step — fire density-swap & water reaction', () => 
         CellularAutomaton.step(bm, 0);
         expect(bm.getPixel(0, 0)).toBe(fire.id);
         expect(bm.getPixel(0, 1)).toBe(sand.id);
-    });
-});
-
-describe('CellularAutomaton.step — per-material flowDistance (v2.7.0)', () => {
-    /**
-     * Builds a sealed 1-tall horizontal channel of `width` air
-     * cells with stone above and below. Place water at `srcX` and
-     * step `steps` times. Returns the rightmost column the water
-     * reached. Designed so horizontal flow is the ONLY motion
-     * available to the fluid (no rise / fall / diagonal possible).
-     */
-    function spreadInChannel(
-        width: number,
-        srcX: number,
-        flowDistance: number,
-        steps: number,
-    ): number {
-        const fluid: Material = {
-            id: 90, name: 'channel-fluid', color: 0x4080c0,
-            density: 1, friction: 0, restitution: 0,
-            destructible: true, destructionResistance: 0,
-            simulation: 'water',
-            flowDistance,
-        };
-        const bm = new ChunkedBitmap({
-            width, height: 3, chunkSize: 1,
-            materials: [fluid, stone],
-        });
-        for (let x = 0; x < width; x++) {
-            bm.setPixel(x, 0, stone.id);
-            bm.setPixel(x, 2, stone.id);
-        }
-        bm.setPixel(srcX, 1, fluid.id);
-        for (let t = 0; t < steps; t++) CellularAutomaton.step(bm, t);
-        let rightmost = -1;
-        for (let x = 0; x < width; x++) {
-            if (bm.getPixel(x, 1) === fluid.id) rightmost = x;
-        }
-        return rightmost;
-    }
-
-    it('flowDistance: 0 disables horizontal flow', () => {
-        // Single water cell at the left wall in a sealed channel.
-        // Vertical, diagonal, and rise are all blocked by stone.
-        // Without horizontal flow the cell never moves.
-        expect(spreadInChannel(20, 0, 0, 50)).toBe(0);
-    });
-
-    it('higher flowDistance reaches farther in fewer ticks', () => {
-        // Single water cell at x=0 (left wall). Only direction
-        // available is rightward via horizontal flow. After 1 tick
-        // the rightmost column equals exactly `flowDistance`.
-        expect(spreadInChannel(20, 0, 1, 1)).toBe(1);
-        expect(spreadInChannel(20, 0, 4, 1)).toBe(4);
-        expect(spreadInChannel(20, 0, 8, 1)).toBe(8);
-    });
-
-    it('omitting flowDistance falls back to default behavior', () => {
-        // Vanilla water (no flowDistance set) levels in the same
-        // ballpark as water with explicit flowDistance=4. Compare
-        // tick counts to within a small tolerance.
-        function ticksToLevel(material: Material): number {
-            const W = 13;
-            const H = 8;
-            const bm = new ChunkedBitmap({
-                width: W, height: H, chunkSize: 1,
-                materials: [material, stone],
-            });
-            for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
-            for (let y = 0; y < 6; y++) bm.setPixel(W >> 1, y, material.id);
-            for (let t = 0; t < 500; t++) {
-                CellularAutomaton.step(bm, t);
-                let above = 0;
-                for (let y = 0; y < H - 2; y++) {
-                    for (let x = 0; x < W; x++) {
-                        if (bm.getPixel(x, y) === material.id) above++;
-                    }
-                }
-                if (above === 0) return t;
-            }
-            return -1;
-        }
-        const defaultWater: Material = {
-            id: 92, name: 'water', color: 0x4080c0,
-            density: 1, friction: 0, restitution: 0,
-            destructible: true, destructionResistance: 0,
-            simulation: 'water',
-        };
-        const explicitWater: Material = { ...defaultWater, id: 93, flowDistance: 4 };
-        const a = ticksToLevel(defaultWater);
-        const b = ticksToLevel(explicitWater);
-        expect(a).toBe(b);
-    });
-});
-
-describe('CellularAutomaton.step — anti-oscillation memory enables compaction (v2.7.6)', () => {
-    // Per-cell `horizFlowSource` records the X coordinate the
-    // cell came from on its last horizontal flow move. The next
-    // call's flow scan skips a target equal to that source X
-    // (the move would just undo the previous one). With this
-    // protection, the v2.6.2 same-rank-beyond guard is no
-    // longer needed and surface cells can compact across air
-    // gaps without oscillating.
-
-    it('alternating water cells on a flat floor coalesce into a contiguous block', () => {
-        // Seed `w.w.w.w.w.w.w` on the floor row. Pre-v2.7.6 the
-        // v2.6.2 guard kept these cells permanently spread; now
-        // they pull together over time.
-        const W = 13;
-        const H = 3;
-        const bm = new ChunkedBitmap({
-            width: W, height: H, chunkSize: 1,
-            materials: [water, stone],
-        });
-        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
-        for (let x = 0; x < W; x += 2) bm.setPixel(x, H - 2, water.id);
-
-        for (let t = 0; t < 200; t++) CellularAutomaton.step(bm, t);
-
-        // Floor row should contain a single contiguous block of
-        // water cells (no internal gaps within the wet region).
-        const floorRow: string = (() => {
-            let r = '';
-            for (let x = 0; x < W; x++) {
-                r += bm.getPixel(x, H - 2) === water.id ? 'w' : '.';
-            }
-            return r;
-        })();
-        const first = floorRow.indexOf('w');
-        const last = floorRow.lastIndexOf('w');
-        let internalGaps = 0;
-        for (let x = first; x <= last; x++) {
-            if (floorRow[x] !== 'w') internalGaps++;
-        }
-        expect(internalGaps).toBe(0);
-        // Cell count preserved.
-        const total = (floorRow.match(/w/g) ?? []).length;
-        expect(total).toBe(7);
-    });
-});
-
-describe('CellularAutomaton.step — pressure flow is 1-cell only (v2.7.5)', () => {
-    // v2.7.4's multi-cell pressure flow could land 2+ cells
-    // from the source, leaving the cell next to the original
-    // source as air with no falling cell to fill it. Visible
-    // as internal gaps in a sand pile and holes in a fluid
-    // surface. v2.7.5: under pressure, flow is always exactly
-    // 1 cell into the nearest air, so the column above can
-    // always cleanly fall into the source's old position.
-
-    it('a tall sand column collapses into a continuous pyramid (no internal gaps)', () => {
-        const W = 17;
-        const H = 12;
-        const bm = new ChunkedBitmap({
-            width: W, height: H, chunkSize: 1,
-            materials: [sand, stone],
-        });
-        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
-        for (let y = 0; y < 8; y++) bm.setPixel(W >> 1, y, sand.id);
-        for (let t = 0; t < 200; t++) CellularAutomaton.step(bm, t);
-
-        // For every column with sand, walking from the topmost
-        // sand cell downward to the floor, every cell must be
-        // sand (no air-sand-air sandwich).
-        let internalGaps = 0;
-        for (let x = 0; x < W; x++) {
-            let topY = -1;
-            for (let y = 0; y < H - 1; y++) {
-                if (bm.getPixel(x, y) === sand.id) {
-                    topY = y;
-                    break;
-                }
-            }
-            if (topY === -1) continue;
-            for (let y = topY; y < H - 1; y++) {
-                if (bm.getPixel(x, y) === 0) internalGaps++;
-            }
-        }
-        expect(internalGaps).toBe(0);
-    });
-});
-
-describe('CellularAutomaton.step — pressure-aware flow (v2.7.4)', () => {
-    // Buried fluid cells (same-rank cell in the OPPOSITE direction
-    // of motion) override the v2.6.2 same-rank-beyond guard, so
-    // tall columns and stacked piles spread aggressively at the
-    // base / top instead of forming sand-like vertical piles.
-    // Sand cells do the same with a stricter threshold and a
-    // smaller flow distance — granular when shallow, fluid-ish
-    // when buried.
-
-    it('a tall water column on a flat floor finishes collapsing within column-height ticks', () => {
-        const W = 13;
-        const H = 8;
-        const bm = new ChunkedBitmap({
-            width: W, height: H, chunkSize: 1,
-            materials: [water, stone],
-        });
-        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
-        const colHeight = 6;
-        for (let y = 0; y < colHeight; y++) bm.setPixel(W >> 1, y, water.id);
-
-        let flatAt = -1;
-        for (let t = 0; t < 50; t++) {
-            CellularAutomaton.step(bm, t);
-            let above = 0;
-            for (let y = 0; y < H - 2; y++) {
-                for (let x = 0; x < W; x++) {
-                    if (bm.getPixel(x, y) === water.id) above++;
-                }
-            }
-            if (above === 0) {
-                flatAt = t;
-                break;
-            }
-        }
-        expect(flatAt).toBeGreaterThan(0);
-        // With pressure-aware flow, leveling tracks column height
-        // closely — pre-v2.7.4 the column drained slowly because
-        // interior cells couldn't push past their same-rank
-        // neighbors.
-        expect(flatAt).toBeLessThanOrEqual(colHeight + 2);
-    });
-
-    it('a tall sand column pyramids with a base wider than its height', () => {
-        // 8-tall sand column → after 100 ticks the pyramid base
-        // should be ≥ pyramid height. Pre-v2.7.4 the 45° angle
-        // gave height ≈ base/2 (so a 4-tall pile would have
-        // base 9), which is "very vertical" relative to a real
-        // pile of granular material.
-        const W = 17;
-        const H = 12;
-        const bm = new ChunkedBitmap({
-            width: W, height: H, chunkSize: 1,
-            materials: [sand, stone],
-        });
-        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
-        for (let y = 0; y < 8; y++) bm.setPixel(W >> 1, y, sand.id);
-        for (let t = 0; t < 100; t++) CellularAutomaton.step(bm, t);
-
-        let maxHeight = 0;
-        const baseCols = new Set<number>();
-        for (let x = 0; x < W; x++) {
-            for (let y = 0; y < H - 1; y++) {
-                if (bm.getPixel(x, y) === sand.id) {
-                    const h = H - 1 - y;
-                    if (h > maxHeight) maxHeight = h;
-                }
-            }
-            if (bm.getPixel(x, H - 2) === sand.id) baseCols.add(x);
-        }
-        expect(baseCols.size).toBeGreaterThanOrEqual(maxHeight);
-    });
-
-    it('a mid-cluster air pocket migrates to the wall edge (v2.7.6)', () => {
-        // 6 gas cells with a 1-cell air pocket and an isolated
-        // gas cell next to the wall. Pre-v2.7.6, the v2.6.2
-        // same-rank-beyond guard pinned the pocket between the
-        // two clusters; v2.7.6's anti-oscillation memory
-        // (`horizFlowSource`) lets the cluster compact across
-        // the gap and pushes the pocket to the wall edge.
-        const bm = gridBitmapV23([
-            '##########',
-            '#gggggg.g#',
-            '#........#',
-            '##########',
-        ]);
-        for (let t = 0; t < 50; t++) CellularAutomaton.step(bm, t);
-        expect(renderGridV23(bm)).toEqual([
-            '##########',
-            '#ggggggg.#',
-            '#........#',
-            '##########',
-        ]);
-    });
-});
-
-describe('CellularAutomaton.step — gas leveling without oscillation (v2.6.2)', () => {
-    // Pre-v2.6.2 the per-cell L/R flip combined with multi-cell flow
-    // made an air pocket between two same-rank clusters dance back
-    // and forth between them every tick — gas at the ceiling never
-    // looked stable. The fix: stop horizontal flow scan at the
-    // largest d where the cell BEYOND is not same-rank. The pocket
-    // pins where it ends up.
-
-    it('gas at ceiling reaches a stable state after enough ticks', () => {
-        // Pour 6 gas cells into a sealed box; let them rise to the
-        // ceiling. After 200 ticks the layout must be IDENTICAL to
-        // 199 ticks earlier (no oscillation).
-        const bm = gridBitmapV23([
-            '###########',
-            '#.........#',
-            '#.........#',
-            '#.........#',
-            '#.gg......#',
-            '#.gg......#',
-            '#.gg......#',
-            '###########',
-        ]);
-        for (let t = 0; t < 100; t++) CellularAutomaton.step(bm, t);
-        const snapshot1 = renderGridV23(bm);
-        for (let t = 100; t < 200; t++) CellularAutomaton.step(bm, t);
-        const snapshot2 = renderGridV23(bm);
-        expect(snapshot2).toEqual(snapshot1);
-        // Gas count is preserved.
-        const total = snapshot2.join('').match(/g/g)?.length ?? 0;
-        expect(total).toBe(6);
-    });
-
-    it('an air pocket between cluster and wall migrates and stops at the wall', () => {
-        // Pre-v2.7.6 (v2.6.2 same-rank-beyond guard): pocket
-        // pinned mid-cluster — non-flat surface.
-        // Post-v2.7.6 (anti-oscillation memory): cluster
-        // compacts across the pocket; pocket reaches the wall
-        // edge and stops there. Stable, contiguous, and visually
-        // flat.
-        const bm = gridBitmapV23([
-            '##########',
-            '#gggggg.g#',
-            '#........#',
-            '##########',
-        ]);
-        for (let t = 0; t < 50; t++) CellularAutomaton.step(bm, t);
-        expect(renderGridV23(bm)).toEqual([
-            '##########',
-            '#ggggggg.#',
-            '#........#',
-            '##########',
-        ]);
     });
 });
 

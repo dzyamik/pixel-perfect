@@ -99,6 +99,30 @@ export class ChunkedBitmap {
     private _horizFlowSource: Uint16Array | null = null;
 
     /**
+     * Per-cell mass storage for the v3 mass-based fluid simulation.
+     *
+     * Lazy-allocated as `Float32Array(width * height)`. Once
+     * allocated, the value at `[y * width + x]` is the mass of
+     * the current cell:
+     *
+     *  - **`0`** for air (id `0`).
+     *  - **`1.0`** for full cells of any registered material. This
+     *    is what {@link setPixel} writes; existing v2.x callers
+     *    therefore see no behavior change.
+     *  - **`0..MAX_MASS + MAX_COMPRESS`** for fluid cells under
+     *    the v3 stable-split rules. Above-`MAX_MASS` values come
+     *    from compression at the bottom of a tall column; the
+     *    overflow drives lateral and upward redistribution.
+     *
+     * Static / sand / fire materials always have mass `1.0`
+     * (they're binary). Only `'water' | 'oil' | 'gas'` produce
+     * fractional masses through the cellular-automaton step.
+     *
+     * @see docs-dev/06-v3-mass-based-fluid.md
+     */
+    private _masses: Float32Array | null = null;
+
+    /**
      * @throws If width/height/chunkSize are not positive integers, or if
      *         chunkSize does not divide width and height evenly.
      */
@@ -216,24 +240,146 @@ export class ChunkedBitmap {
         chunk.bitmap[index] = materialId;
         chunk.dirty = true;
         chunk.visualDirty = true;
+        const flatIdx = y * this.width + x;
         // Cell content changed — any per-cell timer (rest counter,
         // burn timer, etc.) tracked for the previous occupant is no
         // longer meaningful for the new one. Reset.
         if (this._cellTimers !== null) {
-            this._cellTimers[y * this.width + x] = 0;
+            this._cellTimers[flatIdx] = 0;
         }
         // Same reasoning for the v2.7.6 horizontal-flow memory:
         // the move-from-where history belonged to the previous
         // occupant, not the new one. Reset to the no-history
         // sentinel.
         if (this._horizFlowSource !== null) {
-            this._horizFlowSource[y * this.width + x] = 0xFFFF;
+            this._horizFlowSource[flatIdx] = 0xFFFF;
+        }
+        // v3 mass storage: a fresh `setPixel` produces a full cell
+        // (mass = 1.0) for any registered material id, or an empty
+        // cell (mass = 0) for air. The mass-based sim then nudges
+        // the value toward the stable-split equilibrium each tick.
+        // Backwards compatible: v2.x callers writing only the
+        // material id see no behavior change.
+        if (this._masses !== null) {
+            this._masses[flatIdx] = materialId === 0 ? 0 : 1.0;
         }
         // Once active-cell tracking is on, propagate activation to
         // the changed cell + its 8-neighborhood so the sim picks up
         // anything that might want to fall, flow, ignite, or settle
         // because of this change. No-op until the sim has called
         // `enableActiveCellTracking`, so non-fluid users pay nothing.
+        if (this._activeCells !== null) {
+            this._touchActiveNeighborhood(x, y);
+        }
+    }
+
+    /**
+     * Reads the mass of the cell at `(x, y)`.
+     *
+     * For binary cells (air, static, sand, fire) returns `0` for
+     * air and `1` for any registered material — same as
+     * `getPixel(x, y) === 0 ? 0 : 1`. For mass-tracked fluid
+     * cells (water, oil, gas under the v3 rules) returns the
+     * actual stored mass, which can be `0..MAX_MASS + MAX_COMPRESS`.
+     *
+     * Out-of-bounds returns `0` (treats outside-the-world as
+     * air-equivalent), matching {@link getPixel}'s behavior.
+     */
+    getMass(x: number, y: number): number {
+        if (x < 0 || x >= this.width || y < 0 || y >= this.height) {
+            return 0;
+        }
+        if (this._masses !== null) {
+            return this._masses[y * this.width + x]!;
+        }
+        return this.getPixel(x, y) === 0 ? 0 : 1.0;
+    }
+
+    /**
+     * Lazy-allocates `_masses` as `Float32Array(width × height)`
+     * and seeds it: every cell with a registered material id
+     * (`getPixel(x, y) !== 0`) gets `mass = 1.0`; air cells stay
+     * at `0`. Idempotent — guarded by the null check at the call
+     * sites. Without the seed, the first mass mutation would zero
+     * out the implicit `1.0` of every other cell.
+     */
+    private _initMassArray(): void {
+        const masses = new Float32Array(this.width * this.height);
+        const W = this.width;
+        const H = this.height;
+        for (let y = 0; y < H; y++) {
+            for (let x = 0; x < W; x++) {
+                if (this.getPixel(x, y) !== 0) masses[y * W + x] = 1.0;
+            }
+        }
+        this._masses = masses;
+    }
+
+    /**
+     * Writes the mass for the cell at `(x, y)`. The cell's material
+     * id is updated as a side effect:
+     *
+     *  - If `mass <= 0`, the cell becomes air (`id = 0`).
+     *  - If `mass > 0`, the cell keeps its current id (or, if the
+     *    cell was previously air, takes the id from the optional
+     *    `idIfAir` argument).
+     *
+     * Lazy-allocates the mass array on first call. Marks the
+     * owning chunk dirty and propagates active-cell activation
+     * (same as `setPixel`).
+     *
+     * Used by `CellularAutomaton.step`'s mass-transfer rules; not
+     * typically called by application code.
+     *
+     * @throws If `(x, y)` is out of bounds, or if `mass` is not
+     *         finite.
+     */
+    setMass(x: number, y: number, mass: number, idIfAir = 0): void {
+        if (!Number.isInteger(x) || !Number.isInteger(y)) {
+            throw new RangeError(`setMass coordinates must be integers; got (${x}, ${y})`);
+        }
+        if (x < 0 || x >= this.width || y < 0 || y >= this.height) {
+            throw new RangeError(
+                `setMass coords (${x}, ${y}) out of bounds (${this.width} x ${this.height})`,
+            );
+        }
+        if (!Number.isFinite(mass)) {
+            throw new RangeError(`mass must be a finite number; got ${mass}`);
+        }
+        const flatIdx = y * this.width + x;
+        // Lazy-init the mass array, seeding all current non-air
+        // cells to `1.0` so existing v2.x bitmaps "switch on" to
+        // mass tracking with the same effective state. Without
+        // this seed, cells that were placed via `setPixel` before
+        // any mass operation would silently default to mass 0
+        // (Float32Array zero-init), causing mass loss.
+        if (this._masses === null) {
+            this._initMassArray();
+        }
+        const masses = this._masses!;
+        const currentId = this.getPixel(x, y);
+        if (mass <= 0) {
+            masses[flatIdx] = 0;
+            if (currentId !== 0) {
+                this.setPixel(x, y, 0);
+                // setPixel just touched everything; mass is now 0 from the
+                // setPixel branch above as well. Leave it.
+            }
+            return;
+        }
+        const cs = this.chunkSize;
+        const cx = (x / cs) | 0;
+        const cy = (y / cs) | 0;
+        const lx = x - cx * cs;
+        const ly = y - cy * cs;
+        const chunk = this.chunks[cy * this.chunksX + cx]!;
+        const targetId = currentId !== 0 ? currentId : idIfAir;
+        if (targetId !== 0 && currentId !== targetId) {
+            chunk.bitmap[ly * cs + lx] = targetId;
+        }
+        chunk.dirty = true;
+        chunk.visualDirty = true;
+        masses[flatIdx] = mass;
         if (this._activeCells !== null) {
             this._touchActiveNeighborhood(x, y);
         }

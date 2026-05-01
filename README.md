@@ -4,7 +4,7 @@
 
 ![pixel-perfect — destructible terrain demo](media/hero.gif)
 
-**Status:** `v2.6.0` — stable public surface; cellular-automaton fluid simulation covers sand, water, oil, gas, and fire with density-ranked swaps and multi-cell horizontal flow. Sand-pile settling still bridges fluid sim to Box2D physics; fire ignites flammable materials and burns out via the per-cell timer. Sparse active-cell tracking (v2.4) keeps step cost proportional to moving cells, not world dimensions. Demos 03/07/09 carry annotated `@snippet` blocks rendered as ready-to-paste cards alongside the running game (v2.6); a top-level [recipes index](https://dzyamik.github.io/pixel-perfect/recipes/) aggregates them. Local development only (not on npm yet).
+**Status:** `v3.0.0` — stable public surface; **mass-based fluid simulation** (water/oil/gas) with continuous Float32 mass per cell. Pressure emerges from the over-compression overflow rule, so surfaces actually flatten — closes the v2.x series of incremental fixes for "fluids don't level." Sand / fire / static stay binary (v2.x rules preserved). Cross-material density swaps still atomic. Sparse active-cell tracking (v2.4) keeps step cost proportional to moving cells. Demos 03/07/09 carry annotated `@snippet` blocks rendered as ready-to-paste cards alongside the running game (v2.6); a top-level [recipes index](https://dzyamik.github.io/pixel-perfect/recipes/) aggregates them. Local development only (not on npm yet).
 
 ## What this is
 
