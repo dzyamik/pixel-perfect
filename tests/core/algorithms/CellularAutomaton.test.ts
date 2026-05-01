@@ -1373,6 +1373,47 @@ describe('CellularAutomaton.step — per-material flowDistance (v2.7.0)', () => 
     });
 });
 
+describe('CellularAutomaton.step — pressure flow is 1-cell only (v2.7.5)', () => {
+    // v2.7.4's multi-cell pressure flow could land 2+ cells
+    // from the source, leaving the cell next to the original
+    // source as air with no falling cell to fill it. Visible
+    // as internal gaps in a sand pile and holes in a fluid
+    // surface. v2.7.5: under pressure, flow is always exactly
+    // 1 cell into the nearest air, so the column above can
+    // always cleanly fall into the source's old position.
+
+    it('a tall sand column collapses into a continuous pyramid (no internal gaps)', () => {
+        const W = 17;
+        const H = 12;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [sand, stone],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        for (let y = 0; y < 8; y++) bm.setPixel(W >> 1, y, sand.id);
+        for (let t = 0; t < 200; t++) CellularAutomaton.step(bm, t);
+
+        // For every column with sand, walking from the topmost
+        // sand cell downward to the floor, every cell must be
+        // sand (no air-sand-air sandwich).
+        let internalGaps = 0;
+        for (let x = 0; x < W; x++) {
+            let topY = -1;
+            for (let y = 0; y < H - 1; y++) {
+                if (bm.getPixel(x, y) === sand.id) {
+                    topY = y;
+                    break;
+                }
+            }
+            if (topY === -1) continue;
+            for (let y = topY; y < H - 1; y++) {
+                if (bm.getPixel(x, y) === 0) internalGaps++;
+            }
+        }
+        expect(internalGaps).toBe(0);
+    });
+});
+
 describe('CellularAutomaton.step — pressure-aware flow (v2.7.4)', () => {
     // Buried fluid cells (same-rank cell in the OPPOSITE direction
     // of motion) override the v2.6.2 same-rank-beyond guard, so

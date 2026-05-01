@@ -318,28 +318,37 @@ function stepFluid(
         }
     }
 
-    // Horizontal multi-cell flow — air only. The fluid travels up
-    // to `flowDist` cells in the preferred-then-other direction,
-    // landing at the farthest reachable air cell. Flow halts at the
-    // first non-air cell so it never tunnels through other fluids.
+    // Horizontal flow — air only. Two regimes selected per side:
     //
-    // Oscillation guard (v2.6.2): when scanning for the farthest
-    // air target, also stop if the cell ONE PAST the candidate is
-    // a same-rank fluid. Two same-rank cells flanking a single air
-    // pocket would otherwise dance the pocket back and forth every
-    // tick — visible as the "gas can't establish a level" bug.
+    // (A) **Source under pressure** (same-rank cell in the
+    //     opposite direction of motion — above for sinking, below
+    //     for rising): single 1-cell push into the nearest air.
+    //     Multi-cell jumps would skip intermediate positions and
+    //     leave them as internal gaps inside a sand pile or
+    //     fluid pool. Pressure-mode flow always packs density-
+    //     first. This is the v2.7.5 fix for the user-reported
+    //     "sand has gaps" complaint.
     //
-    // Pressure override (v2.7.4): the guard above is too
-    // conservative for buried cells. A liquid cell at the bottom
-    // of a tall column has same-rank cells on its sides AND above;
-    // the pocket-dance problem doesn't apply because the cells
-    // above are physically pressing it. Allow the move when the
-    // source has a same-rank cell in the OPPOSITE direction of
-    // its own motion (i.e. above for sinking fluids, below for
-    // rising gas) — that's the pressure signal. Tall water columns
-    // and ceiling-piled gas spread aggressively at their bases /
-    // tops; small isolated pockets still pin against walls instead
-    // of oscillating.
+    // (B) **No pressure**: multi-cell flow with the v2.6.2
+    //     oscillation guard. Up to `flowDist` cells in the
+    //     preferred-then-other direction, landing at the farthest
+    //     reachable air. Flow halts at the first non-air cell so
+    //     it never tunnels through other fluids; the guard
+    //     additionally stops the scan when the cell one past the
+    //     candidate target is a same-rank fluid — preventing a
+    //     2-cell pocket-dance pattern that would otherwise
+    //     oscillate forever.
+    //
+    // The guard is intentionally NOT relaxed for "compaction"
+    // (cells trying to merge across an air gap from a tip
+    // position). Local rules can't reliably distinguish "cluster
+    // is spreading into open space" from "cluster is chasing a
+    // wall-anchored same-rank cell" — the latter would oscillate
+    // forever. Surface-cell compaction across air gaps is a
+    // known limitation; in practice the surface IS flat (max
+    // height = 1 once the column drains) but may have non-
+    // contiguous wet/dry alternation. See
+    // `docs-dev/05-simulation.md`.
     const pressureY = y - yDir;
     let underPressure = false;
     if (pressureY >= 0 && pressureY < H) {
@@ -352,11 +361,16 @@ function stepFluid(
     if (flowDist > 0) {
         for (const sx of sides) {
             let target = -1;
-            for (let d = 1; d <= flowDist; d++) {
-                const nx = x + sx * d;
-                if (nx < 0 || nx >= W) break;
-                if (bitmap.getPixel(nx, y) !== 0) break;
-                if (!underPressure) {
+            if (underPressure) {
+                const nx = x + sx;
+                if (nx >= 0 && nx < W && bitmap.getPixel(nx, y) === 0) {
+                    target = nx;
+                }
+            } else {
+                for (let d = 1; d <= flowDist; d++) {
+                    const nx = x + sx * d;
+                    if (nx < 0 || nx >= W) break;
+                    if (bitmap.getPixel(nx, y) !== 0) break;
                     const beyondX = nx + sx;
                     if (beyondX >= 0 && beyondX < W) {
                         const beyondId = bitmap.getPixel(beyondX, y);
@@ -367,8 +381,8 @@ function stepFluid(
                             break;
                         }
                     }
+                    target = nx;
                 }
-                target = nx;
             }
             if (target !== -1) {
                 bitmap.setPixel(target, y, id);
@@ -459,11 +473,13 @@ const SAND_PRESSURE_THRESHOLD = 3;
 
 /**
  * Horizontal flow distance applied to sand grains under pressure
- * (see {@link SAND_PRESSURE_THRESHOLD}). Smaller than the default
- * fluid flow distance (`4`) because sand is still granular — the
- * pressure rule is a release valve, not a full liquefaction.
+ * (see {@link SAND_PRESSURE_THRESHOLD}). Set to `1` because
+ * pressure-mode flow is always 1-cell-only (see the comment in
+ * `stepFluid`'s horizontal-flow block) — any non-zero value
+ * here just gates the flow on/off. Kept as a constant rather
+ * than a literal so the intent stays explicit at the call site.
  */
-const SAND_PRESSURE_FLOW_DIST = 2;
+const SAND_PRESSURE_FLOW_DIST = 1;
 
 /**
  * Increments the at-rest timer for a non-moving sand cell and, if

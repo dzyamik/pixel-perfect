@@ -34,8 +34,68 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v2.7.2 — water extinguishes fire on contact | ✅ done | `v2.7.2` |
 | v2.7.3 — formal benchmark fixture (`npm run bench`) | ✅ done | `v2.7.3` |
 | v2.7.4 — pressure-aware horizontal flow (sand & fluids) | ✅ done | `v2.7.4` |
+| v2.7.5 — pressure flow is 1-cell only (no skipping) | ✅ done | `v2.7.5` |
 
-Test suite: 348 tests across 21 files. typecheck and lint clean.
+Test suite: 349 tests across 21 files. typecheck and lint clean.
+
+---
+
+## v2.7.5 — pressure flow is 1-cell only (2026-05-01)
+
+User-reported follow-up to v2.7.4:
+1. **Sand pile has internal gaps** — air pockets visible inside
+   the pile. Caused by pressure flow at `flowDist=2` letting a
+   grain skip the cell adjacent to the source, with nothing
+   above to fall into the gap.
+2. **Fluid surface doesn't flatten** — wet/dry alternation
+   along the floor row.
+
+### Fix
+
+When the pressure rule fires (source has same-rank cell in the
+direction OPPOSITE its motion), the source now moves to the
+**nearest** air on its preferred side, not the farthest
+reachable in `flowDist`. The source's old position is reliably
+filled by the column above on the same tick, so the cluster
+stays solid.
+
+`SAND_PRESSURE_FLOW_DIST` is kept as a constant (now `1`) so
+the call site stays readable, but pressure-mode flow always
+breaks after the first air target regardless of the value.
+
+### What was NOT fixed (known limitation)
+
+Surface compaction across an air gap. Once a pour drains and
+the cells on the floor no longer have a same-rank cell above
+(no pressure), the v2.6.2 oscillation guard blocks them from
+moving to merge across an air gap. Local rules can't reliably
+distinguish "cluster spreading into open space" (compaction
+OK) from "cluster chasing a wall-anchored same-rank cell"
+(oscillation forever); the guard is intentionally conservative.
+
+In practice the surface IS flat (max height = 1 once the
+column drains), but cells may be non-contiguous along the
+floor row. Documented in `docs-dev/05-simulation.md`. A future
+improvement could add stochastic relaxation or multi-pass
+within-tick compaction.
+
+### Files involved
+
+- `src/core/algorithms/CellularAutomaton.ts` — `stepFluid`
+  horizontal-flow split into two regimes: under-pressure
+  (1-cell only, no v2.6.2 guard) and no-pressure (multi-cell
+  with v2.6.2 guard, original behavior).
+  `SAND_PRESSURE_FLOW_DIST = 1`.
+- `tests/core/algorithms/CellularAutomaton.test.ts` — new
+  describe "pressure flow is 1-cell only (v2.7.5)" with one
+  test asserting an 8-tall sand pile has zero internal gaps
+  after 200 ticks (every column from topmost sand to the
+  floor must be solid sand).
+- `docs-dev/05-simulation.md` — new sections "Pressure flow
+  is always 1-cell" and "Surface compaction is a known
+  limitation."
+
+---
 
 All v2.5 research-doc action items now closed.
 

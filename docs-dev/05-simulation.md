@@ -122,6 +122,39 @@ of `step()`; not exposed.
 
 ---
 
+## Pressure flow is always 1-cell (v2.7.5)
+
+When the pressure rule fires (see below), the source moves to
+the **nearest** air on its preferred side, not the farthest
+reachable in `flowDist`. Multi-cell jumps under pressure would
+skip intermediate cells, leaving them as internal gaps:
+
+- A buried sand grain that jumps 2 cells leaves an air pocket
+  inside the pile.
+- A buried liquid cell that jumps 4 cells leaves visible holes
+  in the floor row even after the column drains.
+
+The 1-cell push always packs density-first: the source's old
+position is filled by the column above (vertical density swap)
+on the same tick, so the cluster shape stays solid.
+
+## Surface compaction is a known limitation
+
+Once a pour drains and surface cells no longer have a same-rank
+cell above (no pressure), they can't bridge an air gap to merge
+with another same-rank cell — the v2.6.2 oscillation guard
+blocks the move. Local rules can't reliably distinguish "cluster
+spreading into open space" (compaction OK) from "cluster chasing
+a wall-anchored same-rank cell" (oscillation forever); the guard
+is intentionally conservative.
+
+In practice the surface IS flat — max height = 1 once the column
+drains — but cells may be non-contiguous along the floor row.
+A future improvement could add stochastic relaxation (small
+chance per tick to merge across an air gap) or multi-pass
+within-tick compaction, but neither is in scope for the v2.7.x
+patches.
+
 ## Pressure-aware flow (v2.7.4)
 
 The v2.6.2 same-rank-beyond guard prevents oscillation but is too
