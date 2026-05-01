@@ -467,11 +467,14 @@ Best-effort, not guaranteed in v1:
 
 This is enough for replay debugging, not enough for lockstep multiplayer.
 
-## v2 — cellular-automaton fluid layer
+## v2 / v3 — cellular-automaton fluid layer
 
 Shipped in `v2.0.0` (sand), `v2.1.0` (water + density swap),
 `v2.2.0` (sand-pile settling), `v2.3.0` (oil / gas / fire +
-multi-cell flow), and `v2.4.0` (sparse active-cell tracking).
+multi-cell flow), `v2.4.0` (sparse active-cell tracking),
+`v3.0.0` (mass-based liquids), and `v3.1.0` (pool-aware fast
+path). v3 details in `docs-dev/06-v3-mass-based-fluid.md` and
+`docs-dev/07-v3.1-pool-based-fluid.md`.
 
 `Material.simulation?: SimulationKind` controls how a material
 moves. `'static'` (default for back-compat) generates Box2D
@@ -482,9 +485,20 @@ that mutates the bitmap in place.
 
 Density-ranked vertical swap (high → low):
 `sand (5) > water (4) > oil (3) > fire (2) > air (1) > gas (0)`.
-Static cells never swap. Diagonal slides and horizontal flow are
-air-only; multi-cell horizontal flow (`FLUID_FLOW_DIST = 4`)
-applies to all liquids and gas.
+Static cells never swap. **Sand and fire stay binary** (one cell
+holds one full unit of material). **Water, oil, and gas use
+mass-based simulation** (each cell stores a `Float32` mass; pressure
+emerges from over-compression overflow). Cross-material density
+swaps remain atomic — masses are preserved when two cells of
+different materials swap places.
+
+**Pool-aware step (v3.1)** — when the active set exceeds
+`POOL_DETECTION_MIN` cells, the step flood-fills connected
+components of same-material fluid cells, distributes mass uniformly
+within each pool, and skips per-cell `stepLiquid` for cells deep
+in a pool (every 4-neighbor in the same pool). Perimeter cells
+still go through `stepLiquid` so spreading and cross-material swaps
+work normally. 45-62% faster on the largest active sets.
 
 **Active-cell tracking (v2.4)** — `step` iterates a sparse
 `Set<number>` of cell indices on `ChunkedBitmap.activeCells`
