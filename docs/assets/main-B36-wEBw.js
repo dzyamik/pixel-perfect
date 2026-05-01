@@ -1,4 +1,4 @@
-/**
+const e=`/**
  * Demo 06 — Worms-style.
  *
  * The "trailer piece" from the roadmap. A simple platformer where:
@@ -9,7 +9,7 @@
  *   - F throws a fused grenade in the cursor direction; on detonation
  *     it carves a crater and applies a radial impulse to nearby
  *     dynamic bodies (the player and any debris).
- *   - When a carve detaches a chunk of terrain, `extractDebris()`
+ *   - When a carve detaches a chunk of terrain, \`extractDebris()\`
  *     detects it and the queue spawns a dynamic body so the chunk
  *     falls naturally.
  *
@@ -189,10 +189,10 @@ class WormsScene extends Phaser.Scene {
         // @snippet character-body-fixed-rotation
         // @title Character body with fixed rotation
         // @desc Worms-/platformer-style movement wants the
-        // @desc character upright at all times. `CreateCircle`
-        // @desc only forwards `type` + `position` to the bodyDef,
-        // @desc so build your own with `fixedRotation = true` and
-        // @desc pass it via `bodyDef`. The body still receives
+        // @desc character upright at all times. \`CreateCircle\`
+        // @desc only forwards \`type\` + \`position\` to the bodyDef,
+        // @desc so build your own with \`fixedRotation = true\` and
+        // @desc pass it via \`bodyDef\`. The body still receives
         // @desc impulses and gravity normally — it just won't
         // @desc tumble.
         const spawnSceneX = this.terrainOriginX + 80;
@@ -223,11 +223,11 @@ class WormsScene extends Phaser.Scene {
 
         // @snippet camera-follow-with-bounds
         // @title Camera follow + world bounds
-        // @desc `setBounds(x, y, w, h)` clamps the camera so it
+        // @desc \`setBounds(x, y, w, h)\` clamps the camera so it
         // @desc never shows past the terrain edges (replace the
         // @desc usual "infinite black void" off-screen). The
-        // @desc 4-arg `startFollow(target, roundPixels, lerpX,
-        // @desc lerpY)` smooths the follow — the lerp factors
+        // @desc 4-arg \`startFollow(target, roundPixels, lerpX,
+        // @desc lerpY)\` smooths the follow — the lerp factors
         // @desc let the camera lag a touch behind the player so
         // @desc fast moves feel weighty.
         this.cameras.main.setBounds(
@@ -340,7 +340,7 @@ class WormsScene extends Phaser.Scene {
         this.stats.update({
             grenades: this.grenades.length,
             debris: this.debris.length,
-            v: `${v.x.toFixed(1)}, ${v.y.toFixed(1)}`,
+            v: \`\${v.x.toFixed(1)}, \${v.y.toFixed(1)}\`,
         });
     }
 
@@ -356,7 +356,7 @@ class WormsScene extends Phaser.Scene {
     }
 
     /**
-     * Scene -> bitmap Y of the first solid pixel below `bitmapX`. Used
+     * Scene -> bitmap Y of the first solid pixel below \`bitmapX\`. Used
      * to spawn the player and to detect "grounded" via a tiny
      * downward probe.
      */
@@ -431,14 +431,14 @@ class WormsScene extends Phaser.Scene {
 
     // @snippet explosion-carve-and-impulse
     // @title Explosion: carve crater + radial impulse falloff
-    // @desc Two-part recipe. (1) `terrain.carve.circle` removes
+    // @desc Two-part recipe. (1) \`terrain.carve.circle\` removes
     // @desc the crater geometry — DebrisDetector picks up any
     // @desc detached cliff slabs next frame. (2) Walk the list
     // @desc of dynamic bodies and apply a radial impulse with
-    // @desc linear falloff (`1 - dist/blastRadius`). Keep the
+    // @desc linear falloff (\`1 - dist/blastRadius\`). Keep the
     // @desc body list small (player + debris + grenades) to
     // @desc avoid scanning the world; for game-wide blast use
-    // @desc `b2World_OverlapAABB` with an AABB filter.
+    // @desc \`b2World_OverlapAABB\` with an AABB filter.
     private detonateGrenade(g: Grenade): void {
         const pos = b2.b2Body_GetPosition(g.bodyId);
         const sceneX = pos.x * PIXELS_PER_METER;
@@ -604,3 +604,4 @@ bootSandbox({
 });
 
 mountCodePanel(demoSource);
+`;export{e as d};

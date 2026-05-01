@@ -13,6 +13,7 @@ import { parseSnippets, renderCard } from '../_shared/code-panel.js';
 import demo02Source from '../02-click-to-carve/main.ts?raw';
 import demo03Source from '../03-physics/main.ts?raw';
 import demo04Source from '../04-falling-debris/main.ts?raw';
+import demo06Source from '../06-worms-style/main.ts?raw';
 import demo07Source from '../07-image-terrain/main.ts?raw';
 import demo08Source from '../08-sprite-playground/main.ts?raw';
 import demo09Source from '../09-falling-sand/main.ts?raw';
@@ -42,6 +43,12 @@ const demos: readonly DemoEntry[] = [
         title: '04 — falling debris',
         blurb: 'Carve detaches islands as dynamic bodies.',
         source: demo04Source,
+    },
+    {
+        slug: '06-worms-style',
+        title: '06 — worms-style',
+        blurb: 'Character controller + grenades + crater explosions.',
+        source: demo06Source,
     },
     {
         slug: '07-image-terrain',

@@ -280,14 +280,17 @@ list.
   correctness pattern, dynamic-body spawn, image-as-terrain
   stamping, and four fluid-material kinds.
 - **Extended (post-v2.7.3)**: `02-click-to-carve`,
-  `04-falling-debris`, `08-sprite-playground`. 9 more
-  snippets: carve/deposit on pointer, wheel brush resize,
-  chunk-repaint counting, debris callback wiring, per-frame
-  extraction, contour-as-Graphics rendering, AABB-pre-check
-  pattern, runtime sprite-texture swap, alpha-outline
-  visualization. **19 snippets across 6 demos** in the
-  recipes index. Demos 01, 05, 06 are still un-annotated;
-  pick them up when there's a high-value snippet to extract.
+  `04-falling-debris`, `06-worms-style`,
+  `08-sprite-playground`. 13 more snippets: carve/deposit on
+  pointer, wheel brush resize, chunk-repaint counting,
+  debris callback wiring, per-frame extraction, contour-as-
+  Graphics rendering, character body with fixed rotation,
+  camera follow + bounds, grounded-via-bitmap-probe,
+  explosion carve+impulse, AABB-pre-check pattern, runtime
+  sprite-texture swap, alpha-outline visualization.
+  **23 snippets across 7 demos** in the recipes index.
+  Demos 01 and 05 are still un-annotated (low recipe value —
+  basic rendering and a simpler subset of demo 08).
 
 ### Marker grammar
 
