@@ -2,7 +2,73 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-01, v2.4 active-cell tracking shipped
+> Last updated: 2026-05-01, v3.1.1 shipped (25× lateral reach)
+
+---
+
+## Open issues
+
+### 🔴 Fluid stops at surfaces — surface acts like a barrier
+
+**Reported:** 2026-05-01, after v3.1.1.
+**Symptom:** when fluid (water / oil / gas) touches a static surface
+(stone, sand, world edge) the fluid behaves as if the surface is a
+barrier that stops further movement, instead of flowing along it.
+Visible in demo 09: water poured against a wall doesn't pool and
+spread the way it should; flow appears to "stick" or "die" at the
+contact line.
+
+**Suspected root causes** (need user reproduction to confirm):
+
+1. **Lateral scan terminates at the FIRST non-fluid cell on each
+   side.** In `stepLiquid` (`src/core/algorithms/CellularAutomaton.ts`,
+   lines ~446-449), when the lateral equalization scan hits a cell
+   that's neither air nor the same fluid, it sets `leftDone` /
+   `rightDone` and stops scanning that side. With `LATERAL_REACH_MAX`
+   now at 25, a thin obstacle at d=2 blocks reach to air at d=3..25
+   on that side — including the gap that the fluid should flow
+   through. Pre-v3.1.1 (reach=5) the symptom was less visible
+   because shorter reach meant fewer obstacles per scan.
+2. **Pool perimeter cells against walls may inherit a "settled"
+   mass from `distributePoolMass` that's below `MAX_MASS`** and
+   therefore never trigger the compression-overflow up-step. When
+   the pool's average mass < 1.0 (an under-filled pool), perimeter
+   cells next to a wall hold less mass than the cell directly
+   above, but the upward overflow only fires when `remaining >
+   MAX_MASS`. Result: vertical column appears flat against the
+   wall instead of building up.
+3. **Wall-blocked fluid doesn't probe diagonals.** A cell with a
+   wall directly below skips step 1 (vertical fall) and goes to
+   step 2 (lateral). It does not try to fall diagonally past the
+   wall edge. In a pour against a wall corner, mass that should
+   round the corner instead piles up at the corner cell.
+
+**Fix candidates** (one or more, in increasing complexity):
+
+- **A — skip-past-obstacle lateral scan:** when the scan hits a
+  static cell at distance `d`, don't immediately mark the side
+  done — keep scanning past it, looking for a same-fluid or air
+  cell at `d+1..reach` that's still reachable through the row
+  above (i.e. fluid can flow over a low wall). Adds an outer
+  height check; small per-tick cost.
+- **B — diagonal fall when vertical-blocked:** in the vertical
+  step, if the cell directly below is static, check `(x ± 1, y +
+  yDir)` for an air target before falling back to lateral. Costs
+  two extra reads per blocked cell; matches expected gravity
+  behavior at cliff edges.
+- **C — drop the early termination entirely:** keep the scan
+  going through static cells, but skip them as flow targets. The
+  scan cost goes from O(reach) → still O(reach) — same complexity,
+  just doesn't cut early. Could regress perf on enclosed-pool
+  scenarios where most lateral neighbors are walls.
+
+**Reproduction:** TBD — user to capture demo 09 paint sequence
+that triggers it. Likely: pour water onto a flat stone shelf
+with a vertical wall at one end; observe flow at the wall edge.
+
+**Next step:** confirm reproduction in demo 09 with profiling
+overlay running, identify which of A/B/C maps to the observed
+behavior, ship as v3.1.2.
 
 ---
 
