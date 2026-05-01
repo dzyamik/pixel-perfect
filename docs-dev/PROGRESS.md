@@ -37,8 +37,62 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v2.7.5 — pressure flow is 1-cell only (no skipping) | ✅ done | `v2.7.5` |
 | v2.7.6 — anti-oscillation memory enables surface compaction | ✅ done | `v2.7.6` |
 | v3.0 — mass-based fluid simulation | ✅ done | `v3.0.0` |
+| v3.0.1 — flatten surfaces + evaporate orphans | ✅ done | `v3.0.1` |
 
-Test suite: 354 tests across 21 files. typecheck and lint clean.
+Test suite: 357 tests across 21 files. typecheck and lint clean.
+
+---
+
+## v3.0.1 — flatten surfaces + evaporate orphans (2026-05-01)
+
+User-reported v3.0.0 issues:
+1. Water/oil/gas leave "in-air" particles.
+2. Surfaces still don't flatten.
+
+Both came from the `MIN_FLOW = 0.005` threshold inherited from
+W-Shadow's tutorial. Two consequences:
+
+- **Orphan particles**: cells with mass between `MIN_MASS`
+  (0.0001) and `MIN_FLOW` (0.005) couldn't transfer — they sat
+  forever as visible water particles in mid-air.
+- **Bell-shape surface**: lateral equalization stops once the
+  flow drops below `MIN_FLOW`, which means adjacent cells freeze
+  with up to `4 × MIN_FLOW = 0.02` mass difference. That's a
+  visible gradient on a "flat" surface.
+
+### Fix
+
+- `MIN_FLOW = 0.0001` (was `0.005`) — set equal to `MIN_MASS`.
+  Any cell that the simulation considers "wet" can also
+  transfer. Cells fully equalize.
+- New evaporation guard at the top of `stepLiquid`: if
+  `remaining < MIN_MASS`, the cell is cleared to air. This
+  catches the rare case where Float32 precision leaves a cell
+  with sub-MIN_MASS mass (no longer transferable, but visible
+  as water).
+
+### Result
+
+Probe: 6-tall water column on 13-wide floor, after 500 ticks.
+
+| | v3.0.0 | v3.0.1 |
+|---|---|---|
+| Floor row masses | `0.41 0.43 0.45 0.47 0.49 0.50 0.52 0.50 0.48 0.47 0.45 0.43 0.41` (bell, max-min = 0.11) | `0.461 0.461 0.461 0.462 0.462 0.462 0.463 0.462 0.462 0.462 0.461 0.461 0.460` (flat, max-min = 0.003) |
+| Orphan particles in air | yes | no |
+
+The 3-cell "single falling water" probe also confirms no orphan
+cells remain mid-air after 50 ticks.
+
+### Files involved
+
+- `src/core/algorithms/CellularAutomaton.ts` — `MIN_FLOW`
+  constant lowered; `stepLiquid` evaporation guard at entry.
+- `tests/core/algorithms/CellularAutomaton.test.ts` — new
+  describe "surface flatness + no orphans (v3.0.1)" with 3
+  tests (uniform floor row, no orphan during fall, evaporate
+  sub-MIN_MASS cells).
+
+---
 
 ---
 

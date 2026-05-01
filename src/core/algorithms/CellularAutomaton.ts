@@ -169,8 +169,17 @@ const MAX_MASS = 1.0;
 const MAX_COMPRESS = 0.02;
 /** Below this mass a cell is considered empty and reverts to air. */
 const MIN_MASS = 0.0001;
-/** Below this transfer amount the move is suppressed (numerical noise). */
-const MIN_FLOW = 0.005;
+/**
+ * Below this transfer amount the move is suppressed (numerical
+ * noise filter). Set equal to `MIN_MASS` (v3.0.1, was `0.005`):
+ * a higher threshold leaves "orphan" cells with mass between
+ * MIN_MASS and MIN_FLOW unable to drain, AND freezes adjacent-
+ * cell mass differences at `4 × MIN_FLOW`, producing a visible
+ * bell shape on water surfaces instead of flatness. With
+ * MIN_FLOW = MIN_MASS, any cell that the simulation considers
+ * "wet" is also able to transfer.
+ */
+const MIN_FLOW = 0.0001;
 /** Maximum mass that can transfer between two cells in a single tick. */
 const MAX_FLOW = 1.0;
 /**
@@ -238,7 +247,16 @@ function stepLiquid(
     srcRank: number,
 ): void {
     let remaining = bitmap.getMass(x, y);
-    if (remaining < MIN_MASS) return;
+    // Evaporate cells with negligible mass (v3.0.1). Without this,
+    // a tiny residual (e.g. `0.5 × MIN_MASS`) sits as a visible
+    // "water particle in air" forever — it can't transfer (mass <
+    // MIN_FLOW even at MIN_FLOW = MIN_MASS) and the cell-active
+    // tracking re-marks it. Mass loss is negligible (a few cells'
+    // worth of MIN_MASS each).
+    if (remaining < MIN_MASS) {
+        bitmap.setMass(x, y, 0);
+        return;
+    }
 
     // 1. Vertical move toward the natural-deep direction (down
     //    for sinking fluids via `yDir = +1`, up for gas via

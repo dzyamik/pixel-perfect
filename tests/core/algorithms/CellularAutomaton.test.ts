@@ -1109,6 +1109,70 @@ describe('CellularAutomaton.step — active-cell tracking', () => {
     });
 });
 
+describe('CellularAutomaton.step — surface flatness + no orphans (v3.0.1)', () => {
+    // v3.0.1 dropped MIN_FLOW from 0.005 to MIN_MASS (0.0001) so
+    // cells fully equalize instead of freezing once differences
+    // hit `4 × MIN_FLOW`. Also added evaporation for stuck-tiny
+    // cells. The result is genuinely flat surfaces and no
+    // mid-air water particles.
+
+    it('a 6-tall column drains to a uniform floor layer (max-min < 0.05)', () => {
+        const W = 13;
+        const H = 8;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [water, stone],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        for (let y = 0; y < 6; y++) bm.setPixel(W >> 1, y, water.id);
+        for (let t = 0; t < 500; t++) CellularAutomaton.step(bm, t);
+
+        // No water above the floor row.
+        for (let y = 0; y < H - 2; y++) {
+            for (let x = 0; x < W; x++) {
+                expect(bm.getPixel(x, y)).toBe(0);
+            }
+        }
+        // Floor row masses near-uniform.
+        const masses: number[] = [];
+        for (let x = 0; x < W; x++) {
+            if (bm.getPixel(x, H - 2) === water.id) {
+                masses.push(bm.getMass(x, H - 2));
+            }
+        }
+        const max = Math.max(...masses);
+        const min = Math.min(...masses);
+        expect(max - min).toBeLessThan(0.05);
+    });
+
+    it('a single falling water cell reaches the floor (no orphan)', () => {
+        const W = 3;
+        const H = 10;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [water, stone],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        bm.setPixel(W >> 1, 0, water.id);
+        for (let t = 0; t < 50; t++) CellularAutomaton.step(bm, t);
+        for (let y = 0; y < H - 2; y++) {
+            for (let x = 0; x < W; x++) {
+                expect(bm.getPixel(x, y)).toBe(0);
+            }
+        }
+    });
+
+    it('a sub-MIN_MASS water cell evaporates on its first step', () => {
+        const bm = new ChunkedBitmap({
+            width: 1, height: 1, chunkSize: 1,
+            materials: [water],
+        });
+        bm.setMass(0, 0, 0.00005, water.id);
+        CellularAutomaton.step(bm, 0);
+        expect(bm.getPixel(0, 0)).toBe(0);
+    });
+});
+
 describe('CellularAutomaton.step — mass-based fluid (v3)', () => {
     it('water mass is conserved across many ticks', () => {
         // Pour 6 mass into a sealed box and verify it stays at 6.
