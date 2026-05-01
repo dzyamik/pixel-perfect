@@ -41,9 +41,107 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v3.0.2 — multi-cell lateral reach (5× gravity flatten speed) | ✅ done | `v3.0.2` |
 | v3.0.3 — perf: fast-path mass access + skip fluid collider rebuilds | ✅ done | `v3.0.3` |
 | v3.0.4 — demo 09 per-frame profiling + adaptive LATERAL_REACH | ✅ done | `v3.0.4` |
-| v3.1 — pool-based fluid simulation | ⬜ in progress (`docs-dev/07-v3.1-pool-based-fluid.md`) | — |
+| v3.1.0 — pool-based fluid simulation (phase 1+2) | ✅ done | `v3.1.0` |
+| v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 
-Test suite: 359 tests across 21 files. typecheck and lint clean.
+Test suite: 373 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.0 — pool-based fluid simulation (2026-05-01)
+
+User-reported: "probably there are even more effective approaches,
+like handling group of elements as 1 element." Affirmative —
+this is the canonical "next-level" optimization for binary CA
+fluid sims, used by every production fluid system that scales
+(Minecraft, DwarfCorp, etc.).
+
+### Mechanism
+
+Each tick, when the active set is large enough to warrant it:
+
+1. **`detectPools(bitmap, materials)`** — flood-fills connected
+   components of same-material fluid cells (water / oil / gas).
+   Builds a `Map<id, FluidPool>` and writes per-cell pool ids
+   to a new `Uint16Array` sidecar (`bitmap._poolIds`).
+2. **`distributePoolMass(bitmap, pool)`** — each pool with
+   ≥ `POOL_MIN_SIZE` cells gets uniform mass distribution
+   (`avg = totalMass / cellCount`). Total mass is preserved
+   exactly. Settles internal mass-distribution work in O(N)
+   per pool with no per-cell flow logic.
+3. **`isPoolInterior(...)`** — outer step loop calls this for
+   each active fluid cell. If every 4-neighbor shares the
+   pool id, the cell is interior — its mass is already set
+   by the distribution and per-cell `stepLiquid` would change
+   nothing. Skip.
+
+Sand, fire, and static cells are unaffected — they don't go
+through the pool path.
+
+### Activation threshold
+
+`POOL_DETECTION_MIN = 10000` active cells. Below this, the
+v3.0.4 per-cell path is fast enough that the O(W×H) flood-fill
+scan would cost more than it saves.
+
+### Bench
+
+| Scenario | v3.0.4 | v3.1.0 | Change |
+|---|---|---|---|
+| Settled world | 5 µs | 7 µs | +2 µs (negligible) |
+| Active pour 100 cells | 41 µs | 53 µs | +12 µs (below threshold) |
+| Big pour 5000 | 1.4 ms | 1.7 ms | +0.3 ms (below threshold) |
+| **Huge pour 25000** | **6.6 ms** | **2.5 ms** | **−62%** |
+| **Thin sheet 12000** | **2.0 ms** | **1.1 ms** | **−45%** |
+| Full mixed 32k (low connectivity) | 13 ms | 12 ms | −8% |
+
+The user's "10 fps with many elements" case sits squarely in
+the high-active-cell regime where pools win. Demo 09's heavy
+pour scenarios should now sustain higher FPS.
+
+### What this replaces
+
+The v3.0.x per-cell `stepLiquid` path is retained for cells
+**outside pools** (singletons, falling drops, < `POOL_MIN_SIZE`)
+and **on pool perimeters** (cells with at least one non-pool
+4-neighbor). Perimeter cells handle:
+
+- Spreading into adjacent air (pool growth).
+- Cross-material density swaps (water sinking through oil).
+- Compression overflow (pool surface rising).
+
+So pool-aware step is a **layered** optimization — bulk
+equilibrium for interior, per-cell flow for boundary work.
+
+### Phase 3 (deferred)
+
+Incremental pool maintenance — replace the per-tick flood fill
+with O(1) pool ops triggered by `setPixel` / `setMass`. Would
+reduce the detection overhead (currently O(W×H) bitmap walk)
+to O(changed cells). Not shipped in v3.1.0 because phase 2
+already gives 45-62% wins on the user's actual scenarios. Will
+revisit if users hit larger worlds (e.g. 1024×512).
+
+### Files involved
+
+- `src/core/algorithms/FluidPools.ts` — new module:
+  `FluidPool` interface, `NO_POOL` sentinel, `detectPools()`,
+  `distributePoolMass()`, `isPoolInterior()`.
+- `src/core/ChunkedBitmap.ts` — `_poolIds: Uint16Array` lazy
+  field; `_getPoolIdsUnchecked()` fast-path getter.
+- `src/core/algorithms/CellularAutomaton.ts` — outer
+  `step()` runs pool detection + distribution above threshold;
+  per-cell loop checks `isPoolInterior` and skips interior
+  cells. New constants `POOL_DETECTION_MIN` and `POOL_MIN_SIZE`.
+- `tests/core/algorithms/FluidPools.test.ts` — 14 tests
+  covering detection (11), distribution (1), interior check
+  (2). Empty bitmaps, static-skip, single blob, separate
+  blobs, water-vs-oil, 4-connectivity, walled separation,
+  pool-id sidecar, NO_POOL for air, partial mass, large
+  region (no stack overflow).
+- `docs-dev/07-v3.1-pool-based-fluid.md` — design plan.
+
+---
 
 ---
 

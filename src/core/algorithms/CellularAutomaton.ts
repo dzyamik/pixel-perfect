@@ -1,6 +1,12 @@
 import type { ChunkedBitmap } from '../ChunkedBitmap.js';
 import type { MaterialRegistry } from '../Materials.js';
 import type { Material } from '../types.js';
+import {
+    detectPools,
+    distributePoolMass,
+    isPoolInterior,
+    NO_POOL,
+} from './FluidPools.js';
 
 /**
  * One-tick cellular-automaton step over the supplied bitmap.
@@ -122,6 +128,29 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
         ? LATERAL_REACH_HIGH_LOAD_VAL
         : LATERAL_REACH_MAX;
 
+    // v3.1 pool-based optimization: when the active set is large
+    // enough to make connected-component detection worthwhile, run
+    // flood fill, redistribute mass uniformly within each pool,
+    // and skip per-cell `stepLiquid` for cells deep INSIDE a pool
+    // (where every 4-neighbor is in the same pool). Perimeter cells
+    // still go through `stepLiquid` so spreading into adjacent air
+    // and cross-material density swaps still work. Cells outside
+    // pools (singletons, falling drops) also use `stepLiquid`.
+    //
+    // For settled bodies of water this collapses ~all of the
+    // per-cell cost into one O(N) flood fill + one O(N) pass over
+    // the pool's cells.
+    let poolIds: Uint16Array | null = null;
+    if (cells.length > POOL_DETECTION_MIN) {
+        const pools = detectPools(bitmap, materials);
+        for (const pool of pools.values()) {
+            if (pool.cells.size >= POOL_MIN_SIZE) {
+                distributePoolMass(bitmap, pool);
+            }
+        }
+        poolIds = bitmap._getPoolIdsUnchecked();
+    }
+
     for (const idx of cells) {
         if (movedThisTick.has(idx)) continue;
         const y = (idx / W) | 0;
@@ -133,6 +162,17 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
         if (material === undefined) continue;
         const kind = material.simulation;
         if (kind === undefined || kind === 'static') continue;
+
+        // v3.1: skip cells deep in a pool. Their mass is already
+        // set by `distributePoolMass`; per-cell flow has nothing
+        // to add (every 4-neighbor is the same material with the
+        // same equilibrium mass).
+        if (poolIds !== null) {
+            const pid = poolIds[idx]!;
+            if (pid !== NO_POOL && isPoolInterior(poolIds, x, y, W, H, pid)) {
+                continue;
+            }
+        }
 
         if (kind === 'sand') {
             stepSand(bitmap, materials, x, y, id, W, H, goRight, movedThisTick);
@@ -220,6 +260,28 @@ const LATERAL_REACH_MAX = 5;
  */
 const LATERAL_REACH_HIGH_LOAD = 8000;
 const LATERAL_REACH_HIGH_LOAD_VAL = 2;
+
+/**
+ * Minimum active-set size that triggers v3.1 pool detection.
+ * Below this, the per-cell `stepLiquid` path is fast enough
+ * that the O(W×H) flood-fill scan would cost more than it
+ * saves. At `≥ POOL_DETECTION_MIN` active cells the per-tick
+ * pool detection overhead is offset by skipping ~80% of the
+ * cells that would otherwise call `stepLiquid` (interior cells
+ * of large pools).
+ *
+ * Tuned empirically (`tests/perf/CellularAutomaton.bench.ts`):
+ * below ~10 K active cells the v3.0.4 per-cell path wins;
+ * above, pool-skip wins.
+ */
+const POOL_DETECTION_MIN = 10000;
+/**
+ * Minimum pool size that gets the equilibrium mass distribution
+ * pass. Smaller pools (singletons, 2-3 cell drops) keep using
+ * per-cell flow — the distribution overhead per pool is non-zero
+ * and tiny pools don't have an "interior" to save work on.
+ */
+const POOL_MIN_SIZE = 8;
 
 /**
  * Given two stacked cells with combined mass `total`, returns

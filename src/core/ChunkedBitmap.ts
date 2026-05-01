@@ -123,6 +123,20 @@ export class ChunkedBitmap {
     private _masses: Float32Array | null = null;
 
     /**
+     * Per-cell pool-id sidecar used by the v3.1 connected-
+     * component pool sim. Each entry holds the id of the
+     * `FluidPool` the cell belongs to, or `0xFFFF` (no pool)
+     * for cells that aren't part of any pool — air, static,
+     * sand, and fire.
+     *
+     * Lazy-allocated as `Uint16Array(width × height)` filled
+     * with `0xFFFF`. Pool detection writes to it; the sim's
+     * step rebuilds the contents at the start of each tick in
+     * phase 1 (or maintains incrementally in phase 3).
+     */
+    private _poolIds: Uint16Array | null = null;
+
+    /**
      * @throws If width/height/chunkSize are not positive integers, or if
      *         chunkSize does not divide width and height evenly.
      */
@@ -339,6 +353,23 @@ export class ChunkedBitmap {
     _getMassArrayUnchecked(): Float32Array {
         if (this._masses === null) this._initMassArray();
         return this._masses!;
+    }
+
+    /**
+     * Internal fast-path: returns the per-cell pool-id sidecar
+     * (`Uint16Array(width × height)`), allocating it lazily on
+     * first access and filling with the `NO_POOL = 0xFFFF`
+     * sentinel. Used by the v3.1 pool-detection step in
+     * `CellularAutomaton`. Public callers don't have a use for
+     * this — it's pool-id tracking, not material id.
+     */
+    _getPoolIdsUnchecked(): Uint16Array {
+        if (this._poolIds === null) {
+            const arr = new Uint16Array(this.width * this.height);
+            arr.fill(0xFFFF);
+            this._poolIds = arr;
+        }
+        return this._poolIds;
     }
 
     /**
