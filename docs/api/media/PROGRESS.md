@@ -42,9 +42,53 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v3.0.3 — perf: fast-path mass access + skip fluid collider rebuilds | ✅ done | `v3.0.3` |
 | v3.0.4 — demo 09 per-frame profiling + adaptive LATERAL_REACH | ✅ done | `v3.0.4` |
 | v3.1.0 — pool-based fluid simulation (phase 1+2) | ✅ done | `v3.1.0` |
+| v3.1.1 — bump LATERAL_REACH 5 → 25 (25× gravity flatten speed) | ✅ done | `v3.1.1` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 
 Test suite: 373 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.1 — 25× surface flattening speed (2026-05-01)
+
+User feedback after v3.1.0: "works well, you can even accelerate
+flattening of surface, not x5 but x25." The pool fast path absorbed
+the cost of v3.0.4's reach=5 by skipping interior cells of large
+pools. With that headroom available, the lateral-reach knob is
+turned up by another 5×.
+
+### Changes
+
+- `LATERAL_REACH_MAX`: `5` → `25`. Cells in a non-pool active set
+  now equalize with up to 25 same-rank neighbors per side per tick.
+- `LATERAL_REACH_HIGH_LOAD_VAL`: `2` → `5`. Sustained-pour throttle
+  preserved but at a less aggressive ratio so heavy pours still
+  flatten visibly while staying within frame budget.
+- `POOL_DETECTION_MIN`: kept at `10000` after a bench experiment
+  showed lowering it hurts draining-pour scenarios where cells
+  aren't yet in stable pools.
+
+### Bench (after, vs v3.1.0)
+
+| scenario | v3.1.0 (reach 5) | v3.1.1 (reach 25) |
+|---|---|---|
+| settled (active set empty) | ~1 ms | ~1 ms |
+| 100 falling cells | ~1.3 ms | ~6.3 ms |
+| 5000-cell draining pour | ~10 ms | ~51 ms |
+| 25000-cell draining pour | ~32 ms | ~29 ms (pool path) |
+| 12000-cell thin sheet | ~83 ms | ~82 ms |
+| 32k mixed bitmap | ~388 ms | ~620 ms |
+
+Hot zone is the 5000-cell draining pour (51 ms ≈ 3 frames). In
+realistic demo input the active set ramps past 10 K within a
+second of sustained pour, at which point the pool fast path
+brings cost back down.
+
+The `LATERAL_REACH_HIGH_LOAD = 8000` threshold still kicks in
+between these two regimes; it caps the worst-case sub-pool-size
+pour at reach=5 cost.
+
+Test suite: 373 tests passing. Lint clean. Typecheck clean.
 
 ---
 

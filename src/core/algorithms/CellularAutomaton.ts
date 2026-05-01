@@ -118,12 +118,12 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
     // freshly-ignited neighbor doesn't spread further this tick.
     const movedThisTick = new Set<number>();
 
-    // Adaptive lateral reach (v3.0.4). At low active counts use the
-    // full `LATERAL_REACH_MAX` for fast surface flattening (5×
-    // gravity rate). Past `LATERAL_REACH_HIGH_LOAD` cells in the
-    // active set, drop to `LATERAL_REACH_HIGH_LOAD_VAL` so heavy
-    // pours don't blow the frame budget. Cost scales linearly with
-    // reach, so halving it ~halves the per-cell sim cost.
+    // Adaptive lateral reach (v3.0.4, retuned v3.1.1). At low active
+    // counts use the full `LATERAL_REACH_MAX` for fast surface
+    // flattening (~25× gravity rate). Past `LATERAL_REACH_HIGH_LOAD`
+    // cells in the active set, drop to `LATERAL_REACH_HIGH_LOAD_VAL`
+    // so heavy pours don't blow the frame budget. Cost scales
+    // linearly with reach.
     const lateralReach = cells.length > LATERAL_REACH_HIGH_LOAD
         ? LATERAL_REACH_HIGH_LOAD_VAL
         : LATERAL_REACH_MAX;
@@ -245,21 +245,26 @@ const LATERAL_EQUALIZE = 0.5;
  * Maximum number of cells on each side that a fluid cell tries
  * to equalize with per tick when the simulation is "lightly
  * loaded" (small active set). Surface flattening propagates
- * ~`LATERAL_REACH_MAX` cells per tick — `5` is roughly 5× the
- * single-cell-per-tick gravity rate (the user-requested feel).
+ * ~`LATERAL_REACH_MAX` cells per tick — `25` is roughly 25× the
+ * single-cell-per-tick gravity rate (v3.1.1, was `5` at v3.0.4).
+ * The pool-based fast path (v3.1) keeps the cost of this larger
+ * reach manageable: cells deep inside a settled pool skip
+ * `stepLiquid` entirely, so only perimeter cells pay the per-cell
+ * O(reach) scan.
  */
-const LATERAL_REACH_MAX = 5;
+const LATERAL_REACH_MAX = 25;
 /**
  * Threshold (in active-set size) above which the cellular
  * automaton drops to {@link LATERAL_REACH_HIGH_LOAD_VAL} for
  * the tick. The scan cost in `stepLiquid` is linear in reach,
- * so halving it ~halves the per-cell sim cost — useful when a
- * sustained pour blows the frame budget. The trade-off is
- * slower spread, but at high load the user is filling cells
- * faster than the sim can settle anyway.
+ * so a smaller value cuts per-cell sim cost — useful when a
+ * sustained pour blows the frame budget before the pool fast
+ * path kicks in. The trade-off is slower spread, but at high
+ * load the user is filling cells faster than the sim can settle
+ * anyway.
  */
 const LATERAL_REACH_HIGH_LOAD = 8000;
-const LATERAL_REACH_HIGH_LOAD_VAL = 2;
+const LATERAL_REACH_HIGH_LOAD_VAL = 5;
 
 /**
  * Minimum active-set size that triggers v3.1 pool detection.
@@ -270,9 +275,12 @@ const LATERAL_REACH_HIGH_LOAD_VAL = 2;
  * cells that would otherwise call `stepLiquid` (interior cells
  * of large pools).
  *
- * Tuned empirically (`tests/perf/CellularAutomaton.bench.ts`):
- * below ~10 K active cells the v3.0.4 per-cell path wins;
- * above, pool-skip wins.
+ * Tuned empirically (`tests/perf/CellularAutomaton.bench.ts`).
+ * Below ~10 K active cells the per-cell path wins; above, pool-skip
+ * wins. v3.1.1 confirmed this even with the bumped lateral reach —
+ * dropping the threshold to 2 K to amortize the larger reach turned
+ * out to lose on draining-pour scenarios where cells aren't in
+ * stable pools yet.
  */
 const POOL_DETECTION_MIN = 10000;
 /**
