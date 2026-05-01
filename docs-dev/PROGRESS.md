@@ -26,9 +26,74 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v2.4 — active-cell tracking (perf) | ✅ done | `v2.4.0` |
 | ~~v2.5 — VitePress concept-and-recipes site + tutorial~~ | retired (existing docs cover the gap; replaced by v2.5/v2.6 below) | — |
 | v2.5 — sim tuning research + simulation concepts doc | ✅ done | — |
-| v2.6 — in-demo code-snippet tutorials (per-demo + recipes index) | ⬜ in progress | — |
+| v2.6 — in-demo code-snippet tutorials (per-demo + recipes index) | ✅ done | `v2.6.0` |
 
-Test suite: 315 tests across 20 files. typecheck and lint clean.
+Test suite: 322 tests across 21 files. typecheck and lint clean.
+
+---
+
+## v2.6 — in-demo code-snippet tutorials (2026-05-01)
+
+Each demo annotates its `main.ts` with `// @snippet <slug>` …
+`// @endsnippet` markers. At runtime the demo imports its own
+source via Vite's `?raw` suffix and mounts a slide-out panel
+showing one card per snippet, with title, description, and a
+copy button. A top-level `examples/recipes/` page aggregates
+every annotated snippet across demos into a single searchable
+list.
+
+### What shipped
+
+- **`examples/_shared/code-panel.ts`** — pure-DOM panel
+  module. `parseSnippets(source)` is a stateless string parser
+  with 7 unit tests; `mountCodePanel(source)` mounts an
+  idempotent panel on the page; `renderCard(snippet)` produces
+  a reusable card DOM that the recipes index uses too. Styles
+  are injected into the document head — no separate CSS file
+  to manage. State (open/closed) persists per-demo in
+  `localStorage`.
+- **`examples/_shared/vite-env.d.ts`** — declares the `?raw`
+  module shape so `tsc --noEmit` is happy with the imports.
+- **`examples/recipes/`** — top-level Vite entry that
+  imports `?raw` from each annotated demo and renders all
+  snippets in source-grouped sections. Live search filters
+  by slug, title, description, and code. New `recipes` link
+  added to the demos landing footer.
+- **Demos annotated**: `03-physics`, `07-image-terrain`,
+  `09-falling-sand`. 10 snippets total covering Box2D
+  setup, terrain wiring, the update-order correctness
+  pattern, dynamic-body spawn, image-as-terrain stamping,
+  and four fluid-material kinds. The other demos can be
+  annotated incrementally.
+
+### Marker grammar
+
+```typescript
+// @snippet <kebab-slug>
+// @title  <human-readable title>          (optional, falls back to slug)
+// @desc   <one-line description>           (optional, can repeat)
+<code lines — normal comments stay verbatim>
+// @endsnippet
+```
+
+Marker lines are stripped from the rendered snippet; the
+remaining body is dedented to column 0 so the "copy" button
+gives clean paste-ready code. Unbalanced markers are silently
+ignored — a half-finished annotation never breaks a demo.
+
+### Files involved
+
+- `examples/_shared/code-panel.ts` — parser + DOM mount + CSS.
+- `examples/_shared/vite-env.d.ts` — `?raw` module declaration.
+- `examples/recipes/index.html` + `examples/recipes/main.ts`
+  — top-level recipes index.
+- `examples/03-physics/main.ts` — 4 snippets + panel mount.
+- `examples/07-image-terrain/main.ts` — 1 snippet + panel mount.
+- `examples/09-falling-sand/main.ts` — 5 snippets + panel mount.
+- `examples/index.html` — recipes link added to the footer.
+- `tests/examples/code-panel.test.ts` — 7 parser tests.
+
+---
 
 ---
 

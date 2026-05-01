@@ -37,6 +37,8 @@ import * as b2 from 'phaser-box2d/dist/PhaserBox2D.js';
 import type { DestructibleTerrain, Material } from '../../src/index.js';
 import type { BodyId, WorldId } from '../../src/physics/index.js';
 import { attachStats, bootSandbox, showHint } from '../_shared/sandbox.js';
+import { mountCodePanel } from '../_shared/code-panel.js';
+import demoSource from './main.ts?raw';
 
 const WIDTH = 512;
 const HEIGHT = 256;
@@ -56,11 +58,15 @@ const STONE: Material = {
     simulation: 'static',
 };
 
+// @snippet settling-sand
+// @title Settling sand (sim → physics bridge)
+// @desc A `'sand'`-simulation Material that, after 30 stationary
+// @desc ticks (~½ s at 60 fps), promotes in-place to a static
+// @desc variant. The static promotion enters the chunk-collider
+// @desc mesh, so dynamic bodies can stand on the resulting pile.
 const SETTLED_SAND: Material = {
     id: 4,
     name: 'settled-sand',
-    // Slightly darker / desaturated tone vs SAND so the user sees
-    // grains "lock in" as they settle.
     color: 0xa88848,
     density: 1,
     friction: 0.7,
@@ -80,12 +86,16 @@ const SAND: Material = {
     destructible: true,
     destructionResistance: 0,
     simulation: 'sand',
-    // Sand at rest for half a second at 60 fps becomes part of the
-    // static collider mesh — debris bodies can stand on the pile.
     settlesTo: SETTLED_SAND.id,
     settleAfterTicks: 30,
 };
+// @endsnippet
 
+// @snippet water-material
+// @title Water material
+// @desc Liquid: falls / spreads (multi-cell horizontal flow).
+// @desc Density rank 4 — sinks through oil (rank 3) and gas
+// @desc (rank 0); blocked by sand (rank 5) and any static cell.
 const WATER: Material = {
     id: 3,
     name: 'water',
@@ -97,6 +107,7 @@ const WATER: Material = {
     destructionResistance: 0,
     simulation: 'water',
 };
+// @endsnippet
 
 const OIL: Material = {
     id: 5,
@@ -122,6 +133,14 @@ const GAS: Material = {
     simulation: 'gas',
 };
 
+// @snippet fire-and-fuel
+// @title Fire material + flammable fuel
+// @desc Fire ages and dies after `burnDuration` ticks. Each
+// @desc tick it ignites the first adjacent cell whose material
+// @desc has `flammable: true`, converting it to a fresh fire
+// @desc cell with its own full burn timer. burnDuration must
+// @desc be in 1..256 (Uint8Array clamp; values > 256 burn
+// @desc forever — see docs-dev/04-tuning-research.md).
 const FIRE: Material = {
     id: 7,
     name: 'fire',
@@ -132,8 +151,6 @@ const FIRE: Material = {
     destructible: true,
     destructionResistance: 0,
     simulation: 'fire',
-    // ~⅔ s at 60 fps — long enough to walk a flame across a wood
-    // line, short enough that lone flames extinguish quickly.
     burnDuration: 40,
 };
 
@@ -149,6 +166,7 @@ const WOOD: Material = {
     simulation: 'static',
     flammable: true,
 };
+// @endsnippet
 
 interface Ball {
     bodyId: BodyId;
@@ -195,6 +213,14 @@ class FallingSandScene extends Phaser.Scene {
         this.terrainOriginX = (this.scale.width - WIDTH) / 2;
         this.terrainOriginY = (this.scale.height - HEIGHT) / 2;
 
+        // @snippet terrain-with-fluids
+        // @title Create terrain with fluids + Box2D
+        // @desc `autoSimulate: true` runs one cellular-automaton
+        // @desc tick at the start of every `terrain.update()`.
+        // @desc `worldId` + `pixelsPerMeter` wires the chunk-
+        // @desc collider mesh into Box2D — only `'static'`
+        // @desc materials (and settled-sand) generate colliders;
+        // @desc fluid cells are rendered but invisible to physics.
         this.terrain = this.pixelPerfect.terrain({
             width: WIDTH,
             height: HEIGHT,
@@ -206,6 +232,7 @@ class FallingSandScene extends Phaser.Scene {
             materials: [STONE, SAND, WATER, SETTLED_SAND, OIL, GAS, FIRE, WOOD],
             autoSimulate: true,
         });
+        // @endsnippet
         this.regenerateTerrain();
 
         this.cursor = this.add.graphics().setDepth(9999);
@@ -330,12 +357,15 @@ class FallingSandScene extends Phaser.Scene {
         this.balls.length = 0;
     }
 
-    /**
-     * Sets every air cell within `brushRadius` of `(sceneX, sceneY)`
-     * to `materialId`. We can't use `terrain.deposit.circle` directly
-     * because that overwrites whatever was there (including stone
-     * walls); we want sand to spawn ONLY into air pockets.
-     */
+    // @snippet paint-into-air
+    // @title Paint a fluid into air cells only
+    // @desc `terrain.deposit.circle` overwrites whatever was
+    // @desc there. For a sand/water "paint brush" you usually
+    // @desc want to spawn only into air, leaving stone walls
+    // @desc and existing fluid alone. This walks the brush
+    // @desc footprint and writes per cell via `bitmap.setPixel`.
+    // @desc setPixel auto-marks the changed cell + its 8
+    // @desc neighbors active for the next sim tick (v2.4).
     private spawnBrushAt(sceneX: number, sceneY: number, materialId: number): void {
         const bm = this.terrain.bitmap;
         const cx = sceneX - this.terrainOriginX;
@@ -355,6 +385,7 @@ class FallingSandScene extends Phaser.Scene {
             }
         }
     }
+    // @endsnippet
 
     private dumpFluid(): void {
         const bm = this.terrain.bitmap;
@@ -439,3 +470,5 @@ bootSandbox({
     height: 360,
     scene: FallingSandScene,
 });
+
+mountCodePanel(demoSource);

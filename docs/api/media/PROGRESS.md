@@ -24,9 +24,135 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v2.2 — sand-pile-becomes-static (settling) | ✅ done | `v2.2.0` |
 | v2.3 — more fluid kinds (gas / oil / fire) + multi-cell flow | ✅ done | `v2.3.0` |
 | v2.4 — active-cell tracking (perf) | ✅ done | `v2.4.0` |
-| v2.5 — VitePress concept-and-recipes site + tutorial | ⬜ planned | — |
+| ~~v2.5 — VitePress concept-and-recipes site + tutorial~~ | retired (existing docs cover the gap; replaced by v2.5/v2.6 below) | — |
+| v2.5 — sim tuning research + simulation concepts doc | ✅ done | — |
+| v2.6 — in-demo code-snippet tutorials (per-demo + recipes index) | ✅ done | `v2.6.0` |
 
-Test suite: 307 tests across 20 files, ~1.5 s. typecheck and lint clean.
+Test suite: 322 tests across 21 files. typecheck and lint clean.
+
+---
+
+## v2.6 — in-demo code-snippet tutorials (2026-05-01)
+
+Each demo annotates its `main.ts` with `// @snippet <slug>` …
+`// @endsnippet` markers. At runtime the demo imports its own
+source via Vite's `?raw` suffix and mounts a slide-out panel
+showing one card per snippet, with title, description, and a
+copy button. A top-level `examples/recipes/` page aggregates
+every annotated snippet across demos into a single searchable
+list.
+
+### What shipped
+
+- **`examples/_shared/code-panel.ts`** — pure-DOM panel
+  module. `parseSnippets(source)` is a stateless string parser
+  with 7 unit tests; `mountCodePanel(source)` mounts an
+  idempotent panel on the page; `renderCard(snippet)` produces
+  a reusable card DOM that the recipes index uses too. Styles
+  are injected into the document head — no separate CSS file
+  to manage. State (open/closed) persists per-demo in
+  `localStorage`.
+- **`examples/_shared/vite-env.d.ts`** — declares the `?raw`
+  module shape so `tsc --noEmit` is happy with the imports.
+- **`examples/recipes/`** — top-level Vite entry that
+  imports `?raw` from each annotated demo and renders all
+  snippets in source-grouped sections. Live search filters
+  by slug, title, description, and code. New `recipes` link
+  added to the demos landing footer.
+- **Demos annotated**: `03-physics`, `07-image-terrain`,
+  `09-falling-sand`. 10 snippets total covering Box2D
+  setup, terrain wiring, the update-order correctness
+  pattern, dynamic-body spawn, image-as-terrain stamping,
+  and four fluid-material kinds. The other demos can be
+  annotated incrementally.
+
+### Marker grammar
+
+```typescript
+// @snippet <kebab-slug>
+// @title  <human-readable title>          (optional, falls back to slug)
+// @desc   <one-line description>           (optional, can repeat)
+<code lines — normal comments stay verbatim>
+// @endsnippet
+```
+
+Marker lines are stripped from the rendered snippet; the
+remaining body is dedented to column 0 so the "copy" button
+gives clean paste-ready code. Unbalanced markers are silently
+ignored — a half-finished annotation never breaks a demo.
+
+### Files involved
+
+- `examples/_shared/code-panel.ts` — parser + DOM mount + CSS.
+- `examples/_shared/vite-env.d.ts` — `?raw` module declaration.
+- `examples/recipes/index.html` + `examples/recipes/main.ts`
+  — top-level recipes index.
+- `examples/03-physics/main.ts` — 4 snippets + panel mount.
+- `examples/07-image-terrain/main.ts` — 1 snippet + panel mount.
+- `examples/09-falling-sand/main.ts` — 5 snippets + panel mount.
+- `examples/index.html` — recipes link added to the footer.
+- `tests/examples/code-panel.test.ts` — 7 parser tests.
+
+---
+
+---
+
+## v2.5 / v2.6 plan (2026-05-01)
+
+The original v2.5 entry — a VitePress concept-and-recipes site —
+is retired. Reasoning: the README, `01-architecture.md`, the
+auto-generated TypeDoc API ref, and the inline TSDoc on every
+exported symbol already cover what a VitePress site would carry.
+Several hours of scaffolding for marginal gain.
+
+Replaced with two narrower deliverables that close real gaps:
+
+### v2.5 — sim tuning research + simulation concepts doc
+
+1. **`docs-dev/04-tuning-research.md`** — audit the cellular
+   automaton's tunable parameters (`FLUID_FLOW_DIST`,
+   `burnDuration`, `settleAfterTicks`) for sensible defaults and
+   document their visual / perf trade-offs. Identify edge cases
+   not currently tested:
+   - `burnDuration = 0` (instant burnout?)
+   - `settleAfterTicks = 0` (immediate settle?)
+   - very tall water columns leveling under low `FLUID_FLOW_DIST`
+   - dense fire fields (every cell on fire)
+   - mixed-rank stacks (sand on water on oil on gas)
+   - threshold > 255 (Uint8Array clamp behaviour)
+
+   Add tests for any obviously-missing edge case. Output is the
+   research doc + maybe a handful of new tests.
+2. **`docs-dev/05-simulation.md`** — consolidate the cellular
+   automaton design rationale that's currently scattered across
+   TSDoc and `01-architecture.md`: density rules, per-cell L/R
+   preference, bottom-up scan order + scan-order edge cases
+   (rising-tunnel, fire-cascade), `movedThisTick` invariants,
+   active-cell tracking semantics, settle/burn timers. The doc
+   future-you reads to understand *why* the sim is shaped the
+   way it is.
+
+### v2.6 — in-demo code-snippet tutorials
+
+Each demo's `index.html` renders the running game alongside the
+relevant source as an extractable, copy-pasteable snippet card.
+
+- **`examples/_shared/code-panel.ts`** — at demo load time,
+  fetches the demo's own `main.ts`, parses
+  `// @snippet:start <name>` / `// @snippet:end` markers (with
+  optional `// @snippet:desc <prose>` lines), renders each block
+  as a discrete card with a "copy" button. Side panel on
+  desktop, collapsed-below on mobile.
+- **Syntax highlighting** via Shiki loaded as an ES module
+  (zero runtime, modest grammar bundle). No VitePress.
+- **`examples/recipes/`** — top-level page aggregating every
+  annotated snippet across demos into a flat searchable list.
+  "All the ready-to-paste snippets in one place."
+- Initial scope: annotate demos **03 (physics)**, **07 (image
+  terrain)**, **09 (falling sand)** — the highest-traffic
+  recipes. Other demos picked up incrementally.
+
+---
 
 ---
 

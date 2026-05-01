@@ -26,6 +26,8 @@ import * as b2 from 'phaser-box2d/dist/PhaserBox2D.js';
 import { DestructibleTerrain } from '../../src/index.js';
 import type { WorldId } from '../../src/physics/index.js';
 import { attachStats, bootSandbox, showHint } from '../_shared/sandbox.js';
+import { mountCodePanel } from '../_shared/code-panel.js';
+import demoSource from './main.ts?raw';
 
 const WIDTH = 512;
 const HEIGHT = 256;
@@ -92,17 +94,30 @@ class PhysicsScene extends Phaser.Scene {
     create(): void {
         this.cameras.main.setBackgroundColor(0x1c2a3b);
 
-        // Phaser-box2d: configure scale + create a world. The world
-        // pool initializer is idempotent across hot reloads.
+        // @snippet box2d-world-setup
+        // @title Box2D world boilerplate
+        // @desc One-time per scene: pixel↔meter scale, world array
+        // @desc init (idempotent across hot reloads), default world
+        // @desc def with gravity. Box2D uses y-up so negative-y is
+        // @desc visually downward in a screen-space scene.
         b2.SetWorldScale(PIXELS_PER_METER);
         b2.b2CreateWorldArray();
         const worldDef = b2.b2DefaultWorldDef();
-        worldDef.gravity.y = -15; // Box2D y-up: negative = downward in screen
+        worldDef.gravity.y = -15;
         this.worldId = b2.b2CreateWorld(worldDef);
+        // @endsnippet
 
         this.terrainOriginX = (this.scale.width - WIDTH) / 2;
         this.terrainOriginY = (this.scale.height - HEIGHT) / 2;
 
+        // @snippet terrain-with-physics
+        // @title Destructible terrain wired to Box2D
+        // @desc `worldId` + `pixelsPerMeter` opt the terrain into
+        // @desc per-chunk static colliders. Each chunk's solid
+        // @desc pixels become triangulated `b2PolygonShape`s on
+        // @desc `terrain.update()`. Carving a chunk auto-rebuilds
+        // @desc only that chunk's body — bodies on other chunks
+        // @desc keep their contacts.
         this.terrain = new DestructibleTerrain({
             scene: this,
             width: WIDTH,
@@ -115,6 +130,7 @@ class PhysicsScene extends Phaser.Scene {
             materials: MATERIALS,
         });
         this.regenerateTerrain();
+        // @endsnippet
 
         // Visual layers: cursor preview on top, debug below cursor.
         this.debug = this.add.graphics().setDepth(9990);
@@ -184,21 +200,20 @@ class PhysicsScene extends Phaser.Scene {
         this.spawnBall(this.terrainOriginX + 400, this.terrainOriginY + 30);
     }
 
+    // @snippet update-order
+    // @title Update order: terrain.update() BEFORE world step
+    // @desc Critical correctness pattern. Doing `WorldStep` first
+    // @desc would mean any body resting on a chunk we then carved
+    // @desc gets a frame of free-fall, then the new chain shape
+    // @desc finds it on the wrong side and tunneling becomes
+    // @desc possible. Rebuilding first guarantees the step sees
+    // @desc fresh colliders + bodies Box2D last knew about, so
+    // @desc contact resolution stays clean.
     override update(_time: number, deltaMs: number): void {
-        // IMPORTANT: terrain rebuilds run BEFORE the world step. If we
-        // stepped first, a body destroyed by the rebuild would lose its
-        // contacts, and any dynamic body that was resting on it would
-        // be in free-fall for one frame; the next step's narrow-phase
-        // could then find the dynamic body penetrating the new chain
-        // shape from the wrong side and let it tunnel through. Doing
-        // the rebuild first guarantees the step always sees fresh
-        // bodies + the dynamic-body positions Box2D last knew about,
-        // so contact resolution stays clean.
         this.terrain.update();
 
         b2.WorldStep({ worldId: this.worldId, deltaTime: deltaMs / 1000 });
 
-        // Sync ball sprite transforms with their bodies.
         for (const ball of this.balls) {
             const pos = b2.b2Body_GetPosition(ball.bodyId);
             const rot = b2.b2Body_GetRotation(ball.bodyId);
@@ -213,6 +228,7 @@ class PhysicsScene extends Phaser.Scene {
             brush: this.brushRadius,
         });
     }
+    // @endsnippet
 
     private drawDebug(): void {
         this.debug.clear();
@@ -238,8 +254,13 @@ class PhysicsScene extends Phaser.Scene {
         }
     }
 
+    // @snippet spawn-dynamic-ball
+    // @title Spawn a dynamic ball (Box2D body + Phaser image)
+    // @desc One-shot helper: create a `DYNAMIC` circle body at
+    // @desc the given screen-space position (pixel→meter + y-flip)
+    // @desc and pair it with a Phaser image you can sync each
+    // @desc frame in `update()`.
     private spawnBall(x: number, y: number): void {
-        // Box2D position: pixels → meters with y-flip.
         const result = b2.CreateCircle({
             worldId: this.worldId,
             type: b2.DYNAMIC,
@@ -252,6 +273,7 @@ class PhysicsScene extends Phaser.Scene {
         const image = this.add.image(x, y, 'ball').setDepth(50);
         this.balls.push({ bodyId: result.bodyId, image });
     }
+    // @endsnippet
 
     private clearBalls(): void {
         for (const ball of this.balls) {
@@ -284,3 +306,5 @@ bootSandbox({
     height: 360,
     scene: PhysicsScene,
 });
+
+mountCodePanel(demoSource);

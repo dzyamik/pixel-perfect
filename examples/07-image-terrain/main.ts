@@ -29,6 +29,8 @@
 import * as Phaser from 'phaser';
 import type { DestructibleTerrain, Material } from '../../src/index.js';
 import { attachStats, bootSandbox, showHint } from '../_shared/sandbox.js';
+import { mountCodePanel } from '../_shared/code-panel.js';
+import demoSource from './main.ts?raw';
 
 const SOURCE_W = 256;
 const SOURCE_H = 192;
@@ -223,20 +225,19 @@ class ImageTerrainScene extends Phaser.Scene {
         this.stats.update({ brush: this.brushRadius });
     }
 
-    /**
-     * Reads the source canvas's pixels via `getImageData` and stamps
-     * the alpha mask onto the bitmap. This is the entire bridge from
-     * "PNG asset" to "destructible-terrain bitmap" — one call to
-     * `terrain.deposit.fromAlphaTexture(source, dstX, dstY, materialId)`
-     * which expects an `AlphaSource = { data: Uint8ClampedArray, width,
-     * height }` (which `ImageData` satisfies structurally).
-     *
-     * The destination position (dstX, dstY) is in **bitmap** coords,
-     * not scene coords — the deposit op operates on the bitmap
-     * directly, and `terrain.deposit.*` subtracts the terrain's
-     * scene-space origin internally. Here we want the island
-     * roughly centered, so dst is bitmap-half minus source-half.
-     */
+    // @snippet stamp-image-as-terrain
+    // @title Stamp a PNG / canvas onto the bitmap
+    // @desc One call bridges "image asset" to "destructible
+    // @desc terrain": grab the source's `ImageData` (via
+    // @desc `getImageData` for a canvas, or `this.load.image` +
+    // @desc `texture.getSourceImage()` for a PNG) and pass it to
+    // @desc `terrain.deposit.fromAlphaTexture(src, dstX, dstY,
+    // @desc materialId, alphaThreshold)`. Multi-material terrains
+    // @desc come for free: stamp the same source twice with
+    // @desc different thresholds — lower threshold catches the
+    // @desc soft outline, higher threshold catches only the dense
+    // @desc core. Coordinates are scene-space; the deposit op
+    // @desc subtracts the terrain's origin internally.
     private stampSource(): void {
         const tex = this.textures.get(SOURCE_TEXTURE_KEY);
         const src = tex.getSourceImage() as HTMLCanvasElement;
@@ -244,20 +245,13 @@ class ImageTerrainScene extends Phaser.Scene {
         if (ctx === null) return;
         const imageData = ctx.getImageData(0, 0, SOURCE_W, SOURCE_H);
 
-        // Centered horizontally; bottom-aligned vertically so the
-        // island sits on a "sea floor" baseline.
         const dstSceneX = this.terrainOriginX + (BITMAP_W - SOURCE_W) / 2;
         const dstSceneY = this.terrainOriginY + (BITMAP_H - SOURCE_H);
 
-        // Two-pass deposit: first pass stamps everything as SAND, then
-        // a second pass stamps a tighter "dirt cap" mask — same source
-        // image, but we use a higher alpha threshold so only the
-        // darker (more opaque) center counts. This is a tiny demo of
-        // how multi-material terrains can be built from a single
-        // image: vary the threshold for each material layer.
         this.terrain.deposit.fromAlphaTexture(imageData, dstSceneX, dstSceneY, SAND.id, 64);
         this.terrain.deposit.fromAlphaTexture(imageData, dstSceneX, dstSceneY, DIRT.id, 220);
     }
+    // @endsnippet
 }
 
 bootSandbox({
@@ -265,3 +259,5 @@ bootSandbox({
     height: 360,
     scene: ImageTerrainScene,
 });
+
+mountCodePanel(demoSource);
