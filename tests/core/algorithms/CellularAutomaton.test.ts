@@ -1245,6 +1245,98 @@ describe('CellularAutomaton.step — fire is displaceable by density swap', () =
     });
 });
 
+describe('CellularAutomaton.step — per-material flowDistance (v2.7.0)', () => {
+    /**
+     * Builds a sealed 1-tall horizontal channel of `width` air
+     * cells with stone above and below. Place water at `srcX` and
+     * step `steps` times. Returns the rightmost column the water
+     * reached. Designed so horizontal flow is the ONLY motion
+     * available to the fluid (no rise / fall / diagonal possible).
+     */
+    function spreadInChannel(
+        width: number,
+        srcX: number,
+        flowDistance: number,
+        steps: number,
+    ): number {
+        const fluid: Material = {
+            id: 90, name: 'channel-fluid', color: 0x4080c0,
+            density: 1, friction: 0, restitution: 0,
+            destructible: true, destructionResistance: 0,
+            simulation: 'water',
+            flowDistance,
+        };
+        const bm = new ChunkedBitmap({
+            width, height: 3, chunkSize: 1,
+            materials: [fluid, stone],
+        });
+        for (let x = 0; x < width; x++) {
+            bm.setPixel(x, 0, stone.id);
+            bm.setPixel(x, 2, stone.id);
+        }
+        bm.setPixel(srcX, 1, fluid.id);
+        for (let t = 0; t < steps; t++) CellularAutomaton.step(bm, t);
+        let rightmost = -1;
+        for (let x = 0; x < width; x++) {
+            if (bm.getPixel(x, 1) === fluid.id) rightmost = x;
+        }
+        return rightmost;
+    }
+
+    it('flowDistance: 0 disables horizontal flow', () => {
+        // Single water cell at the left wall in a sealed channel.
+        // Vertical, diagonal, and rise are all blocked by stone.
+        // Without horizontal flow the cell never moves.
+        expect(spreadInChannel(20, 0, 0, 50)).toBe(0);
+    });
+
+    it('higher flowDistance reaches farther in fewer ticks', () => {
+        // Single water cell at x=0 (left wall). Only direction
+        // available is rightward via horizontal flow. After 1 tick
+        // the rightmost column equals exactly `flowDistance`.
+        expect(spreadInChannel(20, 0, 1, 1)).toBe(1);
+        expect(spreadInChannel(20, 0, 4, 1)).toBe(4);
+        expect(spreadInChannel(20, 0, 8, 1)).toBe(8);
+    });
+
+    it('omitting flowDistance falls back to default behavior', () => {
+        // Vanilla water (no flowDistance set) levels in the same
+        // ballpark as water with explicit flowDistance=4. Compare
+        // tick counts to within a small tolerance.
+        function ticksToLevel(material: Material): number {
+            const W = 13;
+            const H = 8;
+            const bm = new ChunkedBitmap({
+                width: W, height: H, chunkSize: 1,
+                materials: [material, stone],
+            });
+            for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+            for (let y = 0; y < 6; y++) bm.setPixel(W >> 1, y, material.id);
+            for (let t = 0; t < 500; t++) {
+                CellularAutomaton.step(bm, t);
+                let above = 0;
+                for (let y = 0; y < H - 2; y++) {
+                    for (let x = 0; x < W; x++) {
+                        if (bm.getPixel(x, y) === material.id) above++;
+                    }
+                }
+                if (above === 0) return t;
+            }
+            return -1;
+        }
+        const defaultWater: Material = {
+            id: 92, name: 'water', color: 0x4080c0,
+            density: 1, friction: 0, restitution: 0,
+            destructible: true, destructionResistance: 0,
+            simulation: 'water',
+        };
+        const explicitWater: Material = { ...defaultWater, id: 93, flowDistance: 4 };
+        const a = ticksToLevel(defaultWater);
+        const b = ticksToLevel(explicitWater);
+        expect(a).toBe(b);
+    });
+});
+
 describe('CellularAutomaton.step — gas leveling without oscillation (v2.6.2)', () => {
     // Pre-v2.6.2 the per-cell L/R flip combined with multi-cell flow
     // made an air pocket between two same-rank clusters dance back

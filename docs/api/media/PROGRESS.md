@@ -29,8 +29,56 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v2.6 — in-demo code-snippet tutorials (per-demo + recipes index) | ✅ done | `v2.6.0` |
 | v2.6.1 — enforce timer-uint8 ranges at material registration | ✅ done | `v2.6.1` |
 | v2.6.2 — fix gas leveling oscillation | ✅ done | `v2.6.2` |
+| v2.7.0 — per-material flowDistance | ✅ done | `v2.7.0` |
 
-Test suite: 334 tests across 21 files. typecheck and lint clean.
+Test suite: 342 tests across 21 files. typecheck and lint clean.
+
+---
+
+## v2.7.0 — per-material flowDistance (2026-05-01)
+
+`Material.flowDistance?: number` overrides the module-default
+`4` so each fluid kind can have its own spread rate per tick.
+Closes action item #4 from the v2.5 research doc.
+
+- **Range**: integer `0..16`. `0` disables horizontal flow
+  entirely. `16` is the upper budget (a fluid spreading 16
+  cells per tick on a busy board is already at the visual
+  noise floor; higher distances aren't useful and would just
+  burn cycles). Validated at `MaterialRegistry.register`;
+  out-of-range throws.
+- **Defaults**: `'sand'`-simulation always uses `0` regardless
+  of the material's `flowDistance` field (sand is granular
+  by definition). `'water'` / `'oil'` / `'gas'` fall back to
+  the module-default `4` when `flowDistance` is omitted.
+  `'fire'` and `'static'` ignore the field.
+- **Recommended values**: `lava: 2`, `oil: 3`, `water: 4`,
+  `gas: 6`, `honey: 1`. Demo 09 now uses `oil: 3` (slightly
+  viscous) and `gas: 6` (aggressive lateral spread) for
+  visual differentiation.
+
+### Files involved
+
+- `src/core/types.ts` — `Material.flowDistance?: number` with
+  TSDoc covering the recommended values and the
+  sand/static/fire override behavior.
+- `src/core/algorithms/CellularAutomaton.ts` —
+  `FLUID_FLOW_DIST` renamed to `DEFAULT_FLUID_FLOW_DIST`;
+  per-call `material.flowDistance ?? DEFAULT_FLUID_FLOW_DIST`
+  threaded into `stepFluid`.
+- `src/core/Materials.ts` — registration validates
+  `flowDistance ∈ 0..16` (integer) when set.
+- `tests/core/Materials.test.ts` — 5 new validation tests
+  (accept range, reject below/above, non-integer, omit).
+- `tests/core/algorithms/CellularAutomaton.test.ts` — 3 new
+  behavioral tests under "per-material flowDistance" using
+  a 1-tall sealed channel to isolate horizontal flow:
+  flowDistance=0 truly disables, higher distances reach
+  farther in 1 tick, omitting the field matches `=4`.
+- `examples/09-falling-sand/main.ts` — oil and gas now
+  carry explicit per-material `flowDistance`.
+
+---
 
 ---
 

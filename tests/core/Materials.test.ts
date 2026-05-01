@@ -183,6 +183,51 @@ describe('MaterialRegistry', () => {
             const r = new MaterialRegistry();
             expect(() => r.register(sandBase)).not.toThrow();
         });
+
+        // ── v2.7.0 per-material flowDistance ──
+
+        const water: Material = {
+            id: 9, name: 'water', color: 0x4080c0,
+            density: 1, friction: 0, restitution: 0,
+            destructible: true, destructionResistance: 0,
+            simulation: 'water',
+        };
+
+        it('accepts flowDistance in 0..16', () => {
+            for (const f of [0, 1, 4, 8, 16]) {
+                const r = new MaterialRegistry();
+                expect(() =>
+                    r.register({ ...water, flowDistance: f }),
+                ).not.toThrow();
+            }
+        });
+
+        it('rejects flowDistance < 0', () => {
+            const r = new MaterialRegistry();
+            expect(() =>
+                r.register({ ...water, flowDistance: -1 }),
+            ).toThrow(/flowDistance.*0\.\.16/i);
+        });
+
+        it('rejects flowDistance > 16', () => {
+            const r = new MaterialRegistry();
+            expect(() =>
+                r.register({ ...water, flowDistance: 17 }),
+            ).toThrow(/flowDistance.*0\.\.16/i);
+        });
+
+        it('rejects non-integer flowDistance', () => {
+            const r = new MaterialRegistry();
+            expect(() =>
+                r.register({ ...water, flowDistance: 4.5 }),
+            ).toThrow(/flowDistance/i);
+        });
+
+        it('skips flowDistance check when undefined', () => {
+            // Default fallback applies at sim time; no validation.
+            const r = new MaterialRegistry();
+            expect(() => r.register(water)).not.toThrow();
+        });
     });
 
     describe('get vs getOrThrow', () => {

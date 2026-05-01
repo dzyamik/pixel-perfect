@@ -93,9 +93,11 @@ const SAND: Material = {
 
 // @snippet water-material
 // @title Water material
-// @desc Liquid: falls / spreads (multi-cell horizontal flow).
-// @desc Density rank 4 — sinks through oil (rank 3) and gas
-// @desc (rank 0); blocked by sand (rank 5) and any static cell.
+// @desc Liquid: falls / spreads. Density rank 4 — sinks through
+// @desc oil (rank 3) and gas (rank 0); blocked by sand (rank 5)
+// @desc and any static cell. \`flowDistance: 4\` is the v2.7
+// @desc default if omitted; tune per-fluid for visual variety
+// @desc (lava: 2 = treacly, water: 4, gas: 6 = aggressive).
 const WATER: Material = {
     id: 3,
     name: 'water',
@@ -106,6 +108,7 @@ const WATER: Material = {
     destructible: true,
     destructionResistance: 0,
     simulation: 'water',
+    flowDistance: 4,
 };
 // @endsnippet
 
@@ -119,6 +122,8 @@ const OIL: Material = {
     destructible: true,
     destructionResistance: 0,
     simulation: 'oil',
+    // Slightly viscous compared to water — slower spread.
+    flowDistance: 3,
 };
 
 const GAS: Material = {
@@ -131,6 +136,9 @@ const GAS: Material = {
     destructible: true,
     destructionResistance: 0,
     simulation: 'gas',
+    // Aggressive lateral spread so a rising plume reaches the
+    // ceiling and levels visibly within a couple of ticks.
+    flowDistance: 6,
 };
 
 // @snippet fire-and-fuel

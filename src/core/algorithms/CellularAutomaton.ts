@@ -36,10 +36,9 @@ import type { Material } from '../types.js';
  *    No horizontal flow. Optionally `settlesTo` a static variant
  *    after `settleAfterTicks` stationary ticks (v2.2 bridge).
  *  - **`'water'`** — falls straight down (density swap), diagonal
- *    into air, multi-cell horizontal flow into air (`FLUID_FLOW_DIST`
- *    cells per tick — see the module-private constant). Pools
- *    level off over ~`width / FLUID_FLOW_DIST` ticks instead of
- *    one-cell-per-tick.
+ *    into air, multi-cell horizontal flow into air. Spread per
+ *    tick is `Material.flowDistance` (default `4`); pools level
+ *    off over ~`width / flowDistance` ticks.
  *  - **`'oil'`** — like water but rank 3 (< water rank 4): can't
  *    displace water on a fall, so oil floats on water.
  *  - **`'gas'`** — rises straight up (density swap), diagonal-up
@@ -130,17 +129,17 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
         } else if (kind === 'water') {
             stepFluid(
                 bitmap, materials, x, y, id, W, H, goRight, movedThisTick,
-                +1, RANK_WATER, FLUID_FLOW_DIST,
+                +1, RANK_WATER, material.flowDistance ?? DEFAULT_FLUID_FLOW_DIST,
             );
         } else if (kind === 'oil') {
             stepFluid(
                 bitmap, materials, x, y, id, W, H, goRight, movedThisTick,
-                +1, RANK_OIL, FLUID_FLOW_DIST,
+                +1, RANK_OIL, material.flowDistance ?? DEFAULT_FLUID_FLOW_DIST,
             );
         } else if (kind === 'gas') {
             stepFluid(
                 bitmap, materials, x, y, id, W, H, goRight, movedThisTick,
-                -1, RANK_GAS, FLUID_FLOW_DIST,
+                -1, RANK_GAS, material.flowDistance ?? DEFAULT_FLUID_FLOW_DIST,
             );
         } else if (kind === 'fire') {
             stepFire(bitmap, materials, x, y, id, material, W, H, movedThisTick);
@@ -157,14 +156,18 @@ const RANK_WATER = 4;
 const RANK_SAND = 5;
 
 /**
- * Multi-cell horizontal flow distance for liquids (water, oil) and
- * gas. A liquid cell that's blocked vertically can move up to this
- * many empty (air) cells sideways in a single tick — without it,
- * a wide pool would take O(width) ticks to level visibly because
- * each cell only spreads by 1 column per tick. Higher = more
- * "responsive" liquids; lower = more granular look. 4 is a balance.
+ * Default multi-cell horizontal flow distance used when a fluid
+ * material doesn't supply its own `flowDistance`. A liquid cell
+ * that's blocked vertically can move up to this many empty (air)
+ * cells sideways in a single tick — without it, a wide pool would
+ * take O(width) ticks to level visibly because each cell only
+ * spreads by 1 column per tick. Higher = more "responsive"
+ * liquids; lower = more granular look. `4` is a balance for
+ * water-like fluids; per-material overrides via
+ * `Material.flowDistance` are recommended (lava: 2, oil: 3,
+ * water: 4, gas: 6).
  */
-const FLUID_FLOW_DIST = 4;
+const DEFAULT_FLUID_FLOW_DIST = 4;
 
 /**
  * Returns the density rank for a cell's contents.

@@ -127,6 +127,26 @@ export interface Material {
      * non-fire materials.
      */
     burnDuration?: number;
+    /**
+     * Optional override for the maximum number of cells this
+     * fluid can flow horizontally per tick when blocked from
+     * vertical motion. Higher = more "responsive" spread; lower
+     * = more granular / viscous. Reasonable values per kind:
+     *
+     *  - water: `4` (default; fast leveling)
+     *  - oil:   `3` (slightly viscous, floats on water)
+     *  - lava:  `2` (treacly)
+     *  - gas:   `6` (aggressive)
+     *  - honey: `1` (barely flows)
+     *
+     * Must be in `0..16`. `0` disables horizontal flow entirely
+     * — useful for granular materials with `simulation: 'sand'`.
+     * Ignored for `'static'` and `'fire'` materials. When omitted,
+     * fluids fall back to the module-default `4`; `'sand'`-
+     * simulation materials always use `0` regardless of this
+     * field.
+     */
+    flowDistance?: number;
 }
 
 /**

@@ -80,6 +80,15 @@ export class MaterialRegistry {
                 );
             }
         }
+        if (material.flowDistance !== undefined) {
+            const f = material.flowDistance;
+            if (!Number.isInteger(f) || f < 0 || f > 16) {
+                throw new RangeError(
+                    `Material '${material.name}' (id ${id}) flowDistance must be an integer in 0..16; got ${f}. ` +
+                        `0 disables horizontal flow; values > 16 hit a per-tick budget that's not worth the visual difference.`,
+                );
+            }
+        }
         this.byId.set(id, material);
     }
 
