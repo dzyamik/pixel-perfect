@@ -237,9 +237,21 @@ export class ChunkedBitmap {
         if (chunk.bitmap[index] === materialId) {
             return;
         }
+        // Only set `chunk.dirty` (the static-collider rebuild
+        // flag) when the change MIGHT affect the static-cell mask
+        // — i.e. either the previous or new material is static
+        // (or unknown, treated as static). Pure fluid-fluid or
+        // fluid-air transitions skip the rebuild path entirely
+        // (`chunkToContours` filters to static anyway, but the
+        // marching-squares scan over the chunk costs real time
+        // when many chunks are dirty per frame).
+        const oldStatic = this._isStaticOrUnknown(chunk.bitmap[index]!);
+        const newStatic = this._isStaticOrUnknown(materialId);
         chunk.bitmap[index] = materialId;
-        chunk.dirty = true;
         chunk.visualDirty = true;
+        if (oldStatic || newStatic) {
+            chunk.dirty = true;
+        }
         const flatIdx = y * this.width + x;
         // Cell content changed — any per-cell timer (rest counter,
         // burn timer, etc.) tracked for the previous occupant is no
@@ -293,6 +305,113 @@ export class ChunkedBitmap {
             return this._masses[y * this.width + x]!;
         }
         return this.getPixel(x, y) === 0 ? 0 : 1.0;
+    }
+
+    /**
+     * Returns `true` if the cell with the given material id should
+     * trigger a static-collider rebuild on change. Air (`0`)
+     * counts as "yes" because air-to-stone (or stone-to-air)
+     * transitions definitely affect the contour. Static and
+     * unknown materials count as "yes." Fluid materials count as
+     * "no" — they never appear in the static contour mask, so
+     * fluid-only mutations skip the rebuild path.
+     */
+    private _isStaticOrUnknown(materialId: number): boolean {
+        if (materialId === 0) return true;
+        const m = this.materials.get(materialId);
+        if (m === undefined) return true;
+        const sim = m.simulation;
+        return sim === undefined || sim === 'static';
+    }
+
+    /**
+     * Internal fast-path used by `CellularAutomaton.stepLiquid`.
+     * Returns the underlying mass array (allocating + seeding it
+     * on first use). Callers MUST treat the array read-only for
+     * cells they don't own and MUST call {@link _markCellChanged}
+     * after writing so chunk dirty / active-cell tracking stay
+     * consistent.
+     *
+     * Bypasses the validation overhead of {@link setMass}; safe
+     * only inside the well-behaved sim loop. Public users should
+     * stick to {@link getMass} / {@link setMass}.
+     */
+    _getMassArrayUnchecked(): Float32Array {
+        if (this._masses === null) this._initMassArray();
+        return this._masses!;
+    }
+
+    /**
+     * Internal fast-path companion to {@link _getMassArrayUnchecked}.
+     * Marks the chunk owning `(x, y)` visually dirty and adds the
+     * cell to the active set if active-cell tracking is on.
+     * Skips the 8-neighbor mark — pass `idChanged: true` only
+     * when the cell's material id transitions (air ↔ fluid),
+     * which warrants neighbor wake-up. For mass-only changes,
+     * leave it `false`.
+     *
+     * Critically, **does NOT set `chunk.dirty`** (the collider-
+     * rebuild flag). Only static-material id changes affect the
+     * static contour, and those always go through {@link setPixel}.
+     * Fluid mass changes / fluid id transitions only need a
+     * visual repaint.
+     *
+     * Bypasses bounds checks; caller guarantees `(x, y)` is in
+     * range.
+     */
+    _markCellChanged(x: number, y: number, idChanged: boolean): void {
+        const cs = this.chunkSize;
+        const cx = (x / cs) | 0;
+        const cy = (y / cs) | 0;
+        const chunk = this.chunks[cy * this.chunksX + cx]!;
+        chunk.visualDirty = true;
+        if (this._activeCells !== null) {
+            if (idChanged) {
+                this._touchActiveNeighborhood(x, y);
+            } else {
+                this._activeCells.add(y * this.width + x);
+            }
+        }
+    }
+
+    /**
+     * Internal fast-path id writer for the sim. Writes
+     * `materialId` to the bitmap cell at `(x, y)` and resets the
+     * cell's per-cell timer + horizontal-flow source memory.
+     * Skips bounds + integer validation, the no-op-on-same-id
+     * check, and the active-set / dirty-chunk bookkeeping —
+     * caller is responsible for following up with
+     * {@link _markCellChanged}.
+     *
+     * Use only inside the sim hot path. Public callers use
+     * {@link setPixel}.
+     */
+    _writeIdUnchecked(x: number, y: number, materialId: number): void {
+        const cs = this.chunkSize;
+        const cx = (x / cs) | 0;
+        const cy = (y / cs) | 0;
+        const lx = x - cx * cs;
+        const ly = y - cy * cs;
+        const chunk = this.chunks[cy * this.chunksX + cx]!;
+        chunk.bitmap[ly * cs + lx] = materialId;
+        const flatIdx = y * this.width + x;
+        if (this._cellTimers !== null) this._cellTimers[flatIdx] = 0;
+        if (this._horizFlowSource !== null) this._horizFlowSource[flatIdx] = 0xFFFF;
+    }
+
+    /**
+     * Internal fast-path id reader for the sim. Reads the
+     * material id at `(x, y)`. Skips out-of-bounds checks (the
+     * caller must clamp / break first).
+     */
+    _readIdUnchecked(x: number, y: number): number {
+        const cs = this.chunkSize;
+        const cx = (x / cs) | 0;
+        const cy = (y / cs) | 0;
+        const lx = x - cx * cs;
+        const ly = y - cy * cs;
+        const chunk = this.chunks[cy * this.chunksX + cx]!;
+        return chunk.bitmap[ly * cs + lx]!;
     }
 
     /**
@@ -374,14 +493,26 @@ export class ChunkedBitmap {
         const ly = y - cy * cs;
         const chunk = this.chunks[cy * this.chunksX + cx]!;
         const targetId = currentId !== 0 ? currentId : idIfAir;
-        if (targetId !== 0 && currentId !== targetId) {
+        const idChanged = targetId !== 0 && currentId !== targetId;
+        if (idChanged) {
             chunk.bitmap[ly * cs + lx] = targetId;
         }
         chunk.dirty = true;
         chunk.visualDirty = true;
         masses[flatIdx] = mass;
         if (this._activeCells !== null) {
-            this._touchActiveNeighborhood(x, y);
+            // v3.0.3 perf: only mark 8 neighbors when the cell's
+            // material id changed (cell appeared, disappeared, or
+            // swapped). Mass-only changes mark just the cell
+            // itself — those are by far the hot path in v3
+            // (`stepLiquid` does ~30 setMass calls per cell per
+            // tick), and the cells whose mass changed are
+            // already in the active set anyway.
+            if (idChanged) {
+                this._touchActiveNeighborhood(x, y);
+            } else {
+                this._activeCells.add(flatIdx);
+            }
         }
     }
 

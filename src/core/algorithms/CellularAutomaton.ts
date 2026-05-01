@@ -258,109 +258,169 @@ function stepLiquid(
     yDir: number,
     srcRank: number,
 ): void {
-    let remaining = bitmap.getMass(x, y);
-    // Evaporate cells with negligible mass (v3.0.1). Without this,
-    // a tiny residual (e.g. `0.5 × MIN_MASS`) sits as a visible
-    // "water particle in air" forever — it can't transfer (mass <
-    // MIN_FLOW even at MIN_FLOW = MIN_MASS) and the cell-active
-    // tracking re-marks it. Mass loss is negligible (a few cells'
-    // worth of MIN_MASS each).
+    // v3.0.3 perf: cache the mass array reference and use direct
+    // index access. setMass(...) does ~30 lookups + bookkeeping
+    // calls per stepLiquid call; with 25k+ active cells per tick
+    // that's the dominant cost. Only call setPixel for actual id
+    // transitions (air ↔ fluid + cross-material swaps); for
+    // mass-only changes write the float directly and use the
+    // lighter `_markCellChanged` to update chunk-dirty + active
+    // set.
+    const masses = bitmap._getMassArrayUnchecked();
+    const idxHere = y * W + x;
+
+    const initialMass = masses[idxHere]!;
+    let remaining = initialMass;
     if (remaining < MIN_MASS) {
-        bitmap.setMass(x, y, 0);
+        // Evaporate. setPixel handles the air transition (8-cell
+        // mark for neighbors that may want to fall in).
+        if (remaining > 0) {
+            masses[idxHere] = 0;
+            if (bitmap._readIdUnchecked(x, y) !== 0) {
+                bitmap._writeIdUnchecked(x, y, 0);
+                bitmap._markCellChanged(x, y, true);
+            }
+        }
         return;
     }
 
-    // 1. Vertical move toward the natural-deep direction (down
-    //    for sinking fluids via `yDir = +1`, up for gas via
-    //    `yDir = -1`). The "deep" cell is always at `ny` — it's
-    //    where mass accumulates regardless of direction. The
-    //    stable-split function applies symmetrically.
+    // 1. Vertical move toward the natural-deep direction.
     const ny = y + yDir;
     if (ny >= 0 && ny < H) {
-        const targetId = bitmap.getPixel(x, ny);
+        const idxNy = ny * W + x;
+        const targetId = bitmap._readIdUnchecked(x, ny);
         if (targetId !== id && targetId !== 0) {
-            // Different non-air material in the deep direction:
-            // try a cross-material density swap. Atomic — masses
-            // preserved on both ends.
+            // Cross-material density swap. Atomic — both cells
+            // change id; masses swap to follow.
             if (canVerticalSwap(srcRank, targetId, materials, yDir)) {
-                const targetMass = bitmap.getMass(x, ny);
-                bitmap.setPixel(x, ny, id);
-                bitmap.setMass(x, ny, remaining);
-                bitmap.setPixel(x, y, targetId);
-                bitmap.setMass(x, y, targetMass, targetId);
+                const targetMass = masses[idxNy]!;
+                bitmap._writeIdUnchecked(x, ny, id);
+                masses[idxNy] = remaining;
+                bitmap._markCellChanged(x, ny, true);
+                bitmap._writeIdUnchecked(x, y, targetId);
+                masses[idxHere] = targetMass;
+                bitmap._markCellChanged(x, y, true);
                 return;
             }
         } else {
             // Air or same-material at deep: mass transfer toward
-            // stable split. The deep cell should hold
-            // `stableSplit(total)`; the rest stays at source.
-            const targetMass = bitmap.getMass(x, ny);
+            // stable split.
+            const targetMass = masses[idxNy]!;
             const total = remaining + targetMass;
             const targetEquilibrium = stableSplit(total);
             let flow = targetEquilibrium - targetMass;
             if (flow > MAX_FLOW) flow = MAX_FLOW;
             if (flow > remaining) flow = remaining;
             if (flow > MIN_FLOW) {
-                bitmap.setMass(x, ny, targetMass + flow, id);
+                const wasAir = targetMass === 0;
+                masses[idxNy] = targetMass + flow;
+                if (wasAir) bitmap._writeIdUnchecked(x, ny, id);
+                bitmap._markCellChanged(x, ny, wasAir);
                 remaining -= flow;
-                bitmap.setMass(x, y, remaining);
-                if (remaining < MIN_MASS) return;
+                if (remaining < MIN_MASS) {
+                    masses[idxHere] = 0;
+                    bitmap._writeIdUnchecked(x, y, 0);
+                    bitmap._markCellChanged(x, y, true);
+                    return;
+                }
             }
         }
     }
 
     // 2 + 3. Lateral equalization (left and right) up to
-    // `LATERAL_REACH` cells on each side. Each step equalizes
-    // toward a single neighbor and uses fresh state, so the
-    // chain of transfers spreads mass outward in a single tick
-    // — roughly `LATERAL_REACH` cells of spread per tick. Stops
-    // when it hits a wall, a different non-air material, or runs
-    // out of source mass.
+    // `LATERAL_REACH` cells on each side.
+    //
+    // v3.0.3 perf: track which side stopped flowing. Once a side
+    // hits a wall, a non-air different material, or the chain
+    // saturates (mass equilibrated), don't re-scan it for higher
+    // `d`. For settled / near-settled bodies of water this skips
+    // most of the inner loop — biggest savings come from large
+    // pools where most cells are at equilibrium with their
+    // neighbors.
+    let leftDone = false;
+    let rightDone = false;
     for (let d = 1; d <= LATERAL_REACH; d++) {
         if (remaining < MIN_MASS) break;
-        for (const sx of [-1, 1]) {
+        if (leftDone && rightDone) break;
+        for (let s = 0; s < 2; s++) {
             if (remaining < MIN_MASS) break;
+            const sx = s === 0 ? -1 : 1;
+            if (sx === -1 && leftDone) continue;
+            if (sx === 1 && rightDone) continue;
             const nx = x + sx * d;
-            if (nx < 0 || nx >= W) continue;
-            const targetId = bitmap.getPixel(nx, y);
-            if (targetId !== id && targetId !== 0) continue;
-            const targetMass = bitmap.getMass(nx, y);
+            if (nx < 0 || nx >= W) {
+                if (sx === -1) leftDone = true; else rightDone = true;
+                continue;
+            }
+            const idxNx = y * W + nx;
+            const targetId = bitmap._readIdUnchecked(nx, y);
+            if (targetId !== id && targetId !== 0) {
+                if (sx === -1) leftDone = true; else rightDone = true;
+                continue;
+            }
+            const targetMass = masses[idxNx]!;
             const diff = remaining - targetMass;
-            if (diff <= 0) continue;
+            if (diff <= 0) {
+                if (sx === -1) leftDone = true; else rightDone = true;
+                continue;
+            }
             let flow = diff * LATERAL_EQUALIZE;
             if (flow > MAX_FLOW) flow = MAX_FLOW;
             if (flow > remaining) flow = remaining;
             if (flow > MIN_FLOW) {
-                bitmap.setMass(nx, y, targetMass + flow, id);
+                const wasAir = targetMass === 0;
+                masses[idxNx] = targetMass + flow;
+                if (wasAir) bitmap._writeIdUnchecked(nx, y, id);
+                bitmap._markCellChanged(nx, y, wasAir);
                 remaining -= flow;
-                bitmap.setMass(x, y, remaining);
+            } else {
+                if (sx === -1) leftDone = true; else rightDone = true;
             }
         }
     }
 
-    // 4. Compression overflow toward the natural-shallow direction
-    //    (up for sinking fluids, down for rising gas).
+    // 4. Compression overflow toward the natural-shallow direction.
     if (remaining > MAX_MASS) {
         const upY = y - yDir;
         if (upY >= 0 && upY < H) {
-            const targetId = bitmap.getPixel(x, upY);
+            const idxUp = upY * W + x;
+            const targetId = bitmap._readIdUnchecked(x, upY);
             if (targetId === id || targetId === 0) {
-                const targetMass = bitmap.getMass(x, upY);
+                const targetMass = masses[idxUp]!;
                 const total = remaining + targetMass;
-                // The "deeper" side should hold `stableSplit(total)`.
-                // We are the deeper side, so we should hold that
-                // amount and overflow the rest upward.
                 const sourceEquilibrium = stableSplit(total);
                 let flow = remaining - sourceEquilibrium;
                 if (flow > MAX_FLOW) flow = MAX_FLOW;
                 if (flow > remaining) flow = remaining;
                 if (flow > MIN_FLOW) {
-                    bitmap.setMass(x, upY, targetMass + flow, id);
+                    const wasAir = targetMass === 0;
+                    masses[idxUp] = targetMass + flow;
+                    if (wasAir) bitmap._writeIdUnchecked(x, upY, id);
+                    bitmap._markCellChanged(x, upY, wasAir);
                     remaining -= flow;
-                    bitmap.setMass(x, y, remaining);
                 }
             }
         }
+    }
+
+    // Final commit. Three cases:
+    //  - Mass dropped below MIN_MASS → evaporate, id transition
+    //    fires the 8-neighbor wake.
+    //  - Mass changed by more than MIN_FLOW → write back, mark
+    //    cell active for next tick.
+    //  - Mass effectively unchanged (sub-MIN_FLOW drift OR no
+    //    transfer at all) → don't touch the active set so the
+    //    cell drops out of the rotation. Big perf win for
+    //    settled bodies of water — most cells in a stable pool
+    //    fall into this branch each tick.
+    const delta = remaining - initialMass;
+    if (remaining < MIN_MASS) {
+        masses[idxHere] = 0;
+        bitmap._writeIdUnchecked(x, y, 0);
+        bitmap._markCellChanged(x, y, true);
+    } else if (delta > MIN_FLOW || delta < -MIN_FLOW) {
+        masses[idxHere] = remaining;
+        bitmap._markCellChanged(x, y, false);
     }
 }
 

@@ -39,8 +39,80 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v3.0 — mass-based fluid simulation | ✅ done | `v3.0.0` |
 | v3.0.1 — flatten surfaces + evaporate orphans | ✅ done | `v3.0.1` |
 | v3.0.2 — multi-cell lateral reach (5× gravity flatten speed) | ✅ done | `v3.0.2` |
+| v3.0.3 — perf: fast-path mass access + skip fluid collider rebuilds | ✅ done | `v3.0.3` |
 
 Test suite: 359 tests across 21 files. typecheck and lint clean.
+
+---
+
+## v3.0.3 — perf optimization for high cell counts (2026-05-01)
+
+User-reported: FPS drops to ~10 with many fluid elements. v3.0.0
+shipped the canonical mass-based model but `setMass` and
+`setPixel` had per-call overhead (validation, chunk lookups,
+8-neighbor active-set marking) that compounded badly at
+~30 setMass calls per cell per tick.
+
+### Optimizations
+
+1. **`ChunkedBitmap` internal fast-path API** — `_getMassArrayUnchecked`,
+   `_markCellChanged`, `_writeIdUnchecked`, `_readIdUnchecked`.
+   These bypass the public-API validation overhead and chunk-
+   lookup-per-call costs. Only used inside the sim hot path.
+2. **`stepLiquid` direct mass array access** — caches the mass
+   array reference once at function entry and uses raw indexed
+   reads/writes. Replaced ~20 setMass calls per cell with
+   ~2 array writes + 1 mark.
+3. **`setMass` only 8-neighbor-marks on id changes** — mass-only
+   updates mark just `(x, y)`. Previously every setMass call
+   hit 9 cells via `_touchActiveNeighborhood`; with 30 setMass
+   per cell × 9 = 270 set.add calls per cell per tick, that
+   was a real cost at high cell counts.
+4. **Drop near-equilibrium cells from active set** — a cell
+   whose mass change between ticks is below `MIN_FLOW` is
+   considered "settled" and not re-marked. Stable bodies of
+   water progressively shrink the active set.
+5. **Lateral chain short-circuit** — once a side hits a wall, a
+   different non-air material, or the chain saturates, that
+   side is marked done and skipped for higher `d`.
+6. **`chunk.dirty` only fires on static-affecting transitions**
+   — fluid mass changes and air↔fluid transitions only set
+   `chunk.visualDirty` (renderer repaint). The collider-rebuild
+   flag is reserved for changes that involve a static material
+   (carve / deposit of stone / sand promotion). Major downstream
+   perf win: fluid-only sim ticks no longer trigger marching-
+   squares + Box2D body rebuild work.
+
+### Bench numbers
+
+| Scenario | v3.0.2 | v3.0.3 |
+|---|---|---|
+| Settled world | ~5 µs/step | ~5 µs/step (unchanged early-out) |
+| Active pour (~100 cells) | ~81 µs/step | ~41 µs/step (~50% faster) |
+| Big pour (~5000 cells) | ~1.4 ms/step | ~1.3 ms/step |
+| Huge pour (~25000 cells) | ~7.5 ms/step | ~6.6 ms/step |
+| Full mixed (~32000 cells, all mobile) | ~17 ms/step | ~13 ms/step |
+
+The biggest user-facing win comes from optimization #6 — the
+demo no longer rebuilds Box2D static colliders every frame
+just because water mass changed. That's where the 10-fps stall
+was coming from.
+
+### Files involved
+
+- `src/core/ChunkedBitmap.ts` — new internal fast-path methods;
+  `setMass` 8-neighbor mark gated on id change; `setPixel`
+  `chunk.dirty` gated on static-affecting transitions; new
+  `_isStaticOrUnknown` helper.
+- `src/core/algorithms/CellularAutomaton.ts` — `stepLiquid`
+  rewritten to use `_getMassArrayUnchecked` + `_writeIdUnchecked` +
+  `_markCellChanged`; lateral chain tracks per-side "done"
+  state; final commit gated on `delta > MIN_FLOW`.
+- `tests/perf/CellularAutomaton.bench.ts` — added "big pour"
+  (5000 cells) and "huge pour" (25000 cells) scenarios so
+  future regressions are visible.
+
+---
 
 ---
 

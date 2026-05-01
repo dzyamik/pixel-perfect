@@ -127,6 +127,42 @@ describe('CellularAutomaton.step', () => {
         for (let t = 0; t < 50; t++) CellularAutomaton.step(bm, t);
     });
 
+    bench('big pour: 5000 active water cells, draining', () => {
+        // Large pool of water draining through a hole — closer to
+        // real demo-09 usage. Single step measured.
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 32,
+            materials: [stone, water],
+        });
+        // Stone floor + walls.
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        // 5000 water cells in a 100x50 block.
+        const px = (W >> 1) - 50;
+        const py = 30;
+        for (let y = py; y < py + 50; y++) {
+            for (let x = px; x < px + 100; x++) bm.setPixel(x, y, water.id);
+        }
+        CellularAutomaton.step(bm, 0); // seed
+        for (let t = 0; t < 30; t++) CellularAutomaton.step(bm, t);
+    });
+
+    bench('huge pour: 25000 active water cells, draining', () => {
+        // Wider pool — closer to a "stress test" demo scenario.
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 32,
+            materials: [stone, water],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        // 25000 water cells in a 250x100 block.
+        const px = (W >> 1) - 125;
+        const py = 10;
+        for (let y = py; y < py + 100; y++) {
+            for (let x = px; x < px + 250; x++) bm.setPixel(x, y, water.id);
+        }
+        CellularAutomaton.step(bm, 0);
+        for (let t = 0; t < 10; t++) CellularAutomaton.step(bm, t);
+    });
+
     bench('first-call seed scan (256×128 cold bitmap)', () => {
         // Build, then call step once — measures the seed scan.
         const bm = new ChunkedBitmap({
