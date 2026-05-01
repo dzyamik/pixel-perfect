@@ -36,6 +36,7 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v2.7.4 — pressure-aware horizontal flow (sand & fluids) | ✅ done | `v2.7.4` |
 | v2.7.5 — pressure flow is 1-cell only (no skipping) | ✅ done | `v2.7.5` |
 | v2.7.6 — anti-oscillation memory enables surface compaction | ✅ done | `v2.7.6` |
+| v3.0 — mass-based fluid simulation | ⬜ planned (`docs-dev/06-v3-mass-based-fluid.md`) | — |
 
 Test suite: 350 tests across 21 files. typecheck and lint clean.
 
