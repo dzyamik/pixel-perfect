@@ -167,26 +167,30 @@ spreading puddle re-piles before the column fully drains.
 
 ---
 
-## Performance sanity checks (informal)
+## Performance sanity checks (formal benchmark)
 
 `v2.4` active-cell tracking changes step cost from
 `O(W×H)` to `O(N log N)` where `N` is the number of cells in
-the active set. Empirical observations from the probe runs
-(measured implicitly by Vitest runtime — no formal benchmark):
+the active set. Run `npm run bench` to measure on your
+hardware; numbers below are from a development laptop
+(i7, Node 22, single thread):
 
-- 1×1 fire cell with `burnDuration=300` ran 300 steps in <5 ms
-  total. Effectively free.
-- 5-fluid 6-cell stack reached equilibrium in ~30 steps; total
-  test runtime <1 ms.
-- 5×5 fire-on-wood (25 cells) consumed in 23 steps; total
-  test runtime ~1 ms.
-- 40-cell water column on a 41-wide world flattens in 54
-  ticks with hundreds of moving cells; total test runtime
-  ~10 ms (≈ 200 µs per step).
+| Scenario | per-step | Notes |
+|---|---|---|
+| Settled 256×128 world (active set empty) | **~4 µs** | Lazy `activeCells.size === 0` early-out. |
+| Active pour (~100 falling water cells) | **~44 µs** | Sort + iterate the moving subset. |
+| Full mixed 256×128 bitmap (32 K cells, all mobile) | **~7 ms** | Worst case; nothing settles. |
+| First-call seed scan (256×128 cold bitmap) | **~270 µs** | One-shot O(W×H); comparable to a v2.3 full sweep. |
 
-A formal benchmark fixture would help track regressions. Open
-v2.4 follow-up: `tests/perf/CellularAutomaton.bench.ts` that
-asserts upper bounds on step cost for canonical scenarios.
+Confirms the v2.4 architecture claims: settled worlds are
+effectively free; active sims scale with moving cells, not
+world dimensions; the worst case (every cell mobile) is
+bounded but should be avoided by realistic game design.
+
+Source: `tests/perf/CellularAutomaton.bench.ts`. The fixture
+is informational — no regression assertions, since thresholds
+are hardware-dependent. Compare runs before/after a change to
+see whether you helped or hurt step cost.
 
 ---
 
@@ -213,6 +217,11 @@ asserts upper bounds on step cost for canonical scenarios.
    `'water'`-simulation cell BEFORE the ignition pass and the
    age tick; if found, both cells turn to air. Cardinal-only
    (diagonals don't react) keeps the rule local.
-6. **Formal benchmark fixture** for v2.4 step cost.
+6. ✅ **Formal benchmark fixture** — landed in v2.7.3.
+   `tests/perf/CellularAutomaton.bench.ts` exercises four
+   canonical scenarios (settled, active pour, full mixed,
+   first-call seed) via Vitest's `bench` API. Run with
+   `npm run bench`. Informational only; no regression
+   assertions because thresholds are hardware-dependent.
 
-Items 3, 5, 6 remain opt-in improvements; not v2.x blockers.
+All v2.5 research-doc action items are now closed.
