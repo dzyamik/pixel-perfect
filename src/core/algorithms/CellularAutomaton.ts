@@ -319,6 +319,19 @@ function stepFluid(
     // to `flowDist` cells in the preferred-then-other direction,
     // landing at the farthest reachable air cell. Flow halts at the
     // first non-air cell so it never tunnels through other fluids.
+    //
+    // Oscillation guard (v2.6.2): when scanning for the farthest
+    // air target, also stop if the cell ONE PAST the candidate is
+    // a same-rank fluid. That neighbor would otherwise also try
+    // to fill the pocket from its side on its own tick, and the
+    // per-tick goRight flip combined with the per-cell L/R
+    // preference makes the pocket dance back and forth between
+    // them forever — visible as the "gas can't establish a level"
+    // bug. The scan stops at the largest safe d, which yields a
+    // valid (possibly shorter) target if one exists, or skips this
+    // side entirely if even d=1 is sandwiched. The air pocket
+    // settles next to whatever non-same-rank edge the cluster
+    // happens to butt up against.
     if (flowDist > 0) {
         for (const sx of sides) {
             let target = -1;
@@ -326,6 +339,13 @@ function stepFluid(
                 const nx = x + sx * d;
                 if (nx < 0 || nx >= W) break;
                 if (bitmap.getPixel(nx, y) !== 0) break;
+                const beyondX = nx + sx;
+                if (beyondX >= 0 && beyondX < W) {
+                    const beyondId = bitmap.getPixel(beyondX, y);
+                    if (beyondId !== 0 && densityRank(beyondId, materials) === srcRank) {
+                        break;
+                    }
+                }
                 target = nx;
             }
             if (target !== -1) {

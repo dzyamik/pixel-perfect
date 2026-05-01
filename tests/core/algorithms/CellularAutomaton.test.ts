@@ -1245,6 +1245,59 @@ describe('CellularAutomaton.step — fire is displaceable by density swap', () =
     });
 });
 
+describe('CellularAutomaton.step — gas leveling without oscillation (v2.6.2)', () => {
+    // Pre-v2.6.2 the per-cell L/R flip combined with multi-cell flow
+    // made an air pocket between two same-rank clusters dance back
+    // and forth between them every tick — gas at the ceiling never
+    // looked stable. The fix: stop horizontal flow scan at the
+    // largest d where the cell BEYOND is not same-rank. The pocket
+    // pins where it ends up.
+
+    it('gas at ceiling reaches a stable state after enough ticks', () => {
+        // Pour 6 gas cells into a sealed box; let them rise to the
+        // ceiling. After 200 ticks the layout must be IDENTICAL to
+        // 199 ticks earlier (no oscillation).
+        const bm = gridBitmapV23([
+            '###########',
+            '#.........#',
+            '#.........#',
+            '#.........#',
+            '#.gg......#',
+            '#.gg......#',
+            '#.gg......#',
+            '###########',
+        ]);
+        for (let t = 0; t < 100; t++) CellularAutomaton.step(bm, t);
+        const snapshot1 = renderGridV23(bm);
+        for (let t = 100; t < 200; t++) CellularAutomaton.step(bm, t);
+        const snapshot2 = renderGridV23(bm);
+        expect(snapshot2).toEqual(snapshot1);
+        // Gas count is preserved.
+        const total = snapshot2.join('').match(/g/g)?.length ?? 0;
+        expect(total).toBe(6);
+    });
+
+    it('air pocket between same-rank cluster and wall stays put', () => {
+        // Six gas cells pre-placed at the ceiling with a 1-cell air
+        // pocket at x=7 between (1..6) and (8). Pre-fix this dances
+        // forever; post-fix it's stable.
+        const bm = gridBitmapV23([
+            '##########',
+            '#gggggg.g#',
+            '#........#',
+            '##########',
+        ]);
+        for (let t = 0; t < 50; t++) CellularAutomaton.step(bm, t);
+        // Same configuration after 50 ticks.
+        expect(renderGridV23(bm)).toEqual([
+            '##########',
+            '#gggggg.g#',
+            '#........#',
+            '##########',
+        ]);
+    });
+});
+
 describe('CellularAutomaton.step — mixed-rank stack equilibrium', () => {
     it('5-fluid stack on stone resolves to density-sorted top-down', () => {
         // Initial: . / g / o / w / s / # (ill-sorted)

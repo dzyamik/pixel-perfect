@@ -28,8 +28,58 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v2.5 — sim tuning research + simulation concepts doc | ✅ done | — |
 | v2.6 — in-demo code-snippet tutorials (per-demo + recipes index) | ✅ done | `v2.6.0` |
 | v2.6.1 — enforce timer-uint8 ranges at material registration | ✅ done | `v2.6.1` |
+| v2.6.2 — fix gas leveling oscillation | ✅ done | `v2.6.2` |
 
-Test suite: 332 tests across 21 files. typecheck and lint clean.
+Test suite: 334 tests across 21 files. typecheck and lint clean.
+
+---
+
+## v2.6.2 — fix gas leveling oscillation (2026-05-01)
+
+User-reported regression on demo 09: gas pours never establish a
+flat layer at the ceiling, "looks like water did pre-v2.3."
+Diagnosis: when an air pocket sits between two same-rank fluid
+clusters (or a cluster and a wall), the per-tick `goRight` flip
+combined with the per-cell `xEven` parity makes the pocket
+shuffle one cell back and forth every tick. Visible as
+flickering gas instead of a stable ceiling layer.
+
+### Fix
+
+`stepFluid`'s horizontal-flow scan now stops at the largest `d`
+for which the cell ONE PAST the candidate target is not a
+same-rank fluid. Concretely: when scanning right, if the cell
+beyond the candidate target on the right is the same rank as
+the source, the scan breaks before recording that target as a
+move. The cell at the source either falls back to a shorter
+target (still safe), an opposite-side target, or doesn't move.
+
+The pocket then pins to whatever non-same-rank edge the cluster
+butts up against (a wall, a different fluid, a static surface).
+No more dance.
+
+### Trade-off
+
+In configurations where the air pocket lands between two
+same-rank clusters with non-wall edges on both sides, it stays
+in the middle rather than migrating to a wall. The visual is a
+gas layer with a 1+ cell hole somewhere — still much better
+than oscillation, but not perfectly flat. A future refinement
+could bias the air pocket toward walls; out of scope for this
+patch.
+
+### Files involved
+
+- `src/core/algorithms/CellularAutomaton.ts` — `stepFluid`
+  horizontal-flow scan extended with the same-rank-beyond
+  guard.
+- `tests/core/algorithms/CellularAutomaton.test.ts` — two new
+  tests under "gas leveling without oscillation": (1) gas in a
+  sealed box reaches a state that's identical between tick 100
+  and tick 200, (2) a pre-placed air pocket between same-rank
+  clusters stays put across 50 ticks.
+
+---
 
 ---
 
