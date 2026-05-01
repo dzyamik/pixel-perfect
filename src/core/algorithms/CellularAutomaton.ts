@@ -318,37 +318,35 @@ function stepFluid(
         }
     }
 
-    // Horizontal flow — air only. Two regimes selected per side:
+    // Horizontal flow — air only. Two regimes:
     //
     // (A) **Source under pressure** (same-rank cell in the
     //     opposite direction of motion — above for sinking, below
     //     for rising): single 1-cell push into the nearest air.
-    //     Multi-cell jumps would skip intermediate positions and
-    //     leave them as internal gaps inside a sand pile or
-    //     fluid pool. Pressure-mode flow always packs density-
-    //     first. This is the v2.7.5 fix for the user-reported
-    //     "sand has gaps" complaint.
+    //     Multi-cell jumps would leave the intermediate cells as
+    //     air pockets, visible as internal gaps inside a pile.
     //
-    // (B) **No pressure**: multi-cell flow with the v2.6.2
-    //     oscillation guard. Up to `flowDist` cells in the
-    //     preferred-then-other direction, landing at the farthest
-    //     reachable air. Flow halts at the first non-air cell so
-    //     it never tunnels through other fluids; the guard
-    //     additionally stops the scan when the cell one past the
-    //     candidate target is a same-rank fluid — preventing a
-    //     2-cell pocket-dance pattern that would otherwise
-    //     oscillate forever.
+    // (B) **No pressure**: multi-cell flow up to `flowDist` cells
+    //     in the preferred-then-other direction, landing at the
+    //     farthest reachable air. Flow halts at the first non-air
+    //     cell so it never tunnels through other fluids.
     //
-    // The guard is intentionally NOT relaxed for "compaction"
-    // (cells trying to merge across an air gap from a tip
-    // position). Local rules can't reliably distinguish "cluster
-    // is spreading into open space" from "cluster is chasing a
-    // wall-anchored same-rank cell" — the latter would oscillate
-    // forever. Surface-cell compaction across air gaps is a
-    // known limitation; in practice the surface IS flat (max
-    // height = 1 once the column drains) but may have non-
-    // contiguous wet/dry alternation. See
-    // `docs-dev/05-simulation.md`.
+    // **Anti-oscillation memory (v2.7.6)**: the pre-v2.7.6
+    // "same-rank-beyond guard" is gone. In its place,
+    // `bitmap.horizFlowSource` records the X coordinate the
+    // current occupant came from on its last horizontal flow.
+    // The flow scan skips a target equal to that source X
+    // (would just undo the prior move). This prevents 2-tick
+    // pocket-dance oscillations while ALSO permitting cells to
+    // compact across air gaps — the regime the same-rank-beyond
+    // guard wrongly blocked. Net result: surfaces actually
+    // flatten over time.
+    //
+    // `setPixel` resets `horizFlowSource[idx]` to `0xFFFF` (no
+    // memory), so a cell that arrives at a position via a
+    // density swap or external mutation has fresh history; only
+    // the cell that just *flowed* to its current position
+    // carries the don't-flow-back constraint.
     const pressureY = y - yDir;
     let underPressure = false;
     if (pressureY >= 0 && pressureY < H) {
@@ -359,11 +357,18 @@ function stepFluid(
     }
 
     if (flowDist > 0) {
+        const flowSource = bitmap.horizFlowSource;
+        const cameFromX = flowSource[y * W + x]!;
         for (const sx of sides) {
             let target = -1;
             if (underPressure) {
                 const nx = x + sx;
-                if (nx >= 0 && nx < W && bitmap.getPixel(nx, y) === 0) {
+                if (
+                    nx >= 0
+                    && nx < W
+                    && nx !== cameFromX
+                    && bitmap.getPixel(nx, y) === 0
+                ) {
                     target = nx;
                 }
             } else {
@@ -371,22 +376,17 @@ function stepFluid(
                     const nx = x + sx * d;
                     if (nx < 0 || nx >= W) break;
                     if (bitmap.getPixel(nx, y) !== 0) break;
-                    const beyondX = nx + sx;
-                    if (beyondX >= 0 && beyondX < W) {
-                        const beyondId = bitmap.getPixel(beyondX, y);
-                        if (
-                            beyondId !== 0
-                            && densityRank(beyondId, materials) === srcRank
-                        ) {
-                            break;
-                        }
-                    }
+                    if (nx === cameFromX) break;
                     target = nx;
                 }
             }
             if (target !== -1) {
                 bitmap.setPixel(target, y, id);
                 bitmap.setPixel(x, y, 0);
+                // Remember the source X so this cell skips a flow
+                // back next tick. setPixel just reset the target's
+                // entry to 0xFFFF, so we're free to write here.
+                flowSource[y * W + target] = x;
                 movedThisTick.add(y * W + target);
                 return true;
             }

@@ -138,22 +138,50 @@ The 1-cell push always packs density-first: the source's old
 position is filled by the column above (vertical density swap)
 on the same tick, so the cluster shape stays solid.
 
-## Surface compaction is a known limitation
+## Anti-oscillation memory (v2.7.6)
 
-Once a pour drains and surface cells no longer have a same-rank
-cell above (no pressure), they can't bridge an air gap to merge
-with another same-rank cell — the v2.6.2 oscillation guard
-blocks the move. Local rules can't reliably distinguish "cluster
-spreading into open space" (compaction OK) from "cluster chasing
-a wall-anchored same-rank cell" (oscillation forever); the guard
-is intentionally conservative.
+The pre-v2.7.6 "same-rank-beyond guard" (which prevented
+2-tick pocket-dance oscillations) is gone. In its place,
+each cell stores the X coordinate it came from on its last
+horizontal flow move (`ChunkedBitmap.horizFlowSource`,
+sentinel `0xFFFF` for "no recent move"). The flow scan
+skips any target equal to that source X — the cell can't
+just undo its previous move, so oscillation cycles can't
+sustain.
 
-In practice the surface IS flat — max height = 1 once the column
-drains — but cells may be non-contiguous along the floor row.
-A future improvement could add stochastic relaxation (small
-chance per tick to merge across an air gap) or multi-pass
-within-tick compaction, but neither is in scope for the v2.7.x
-patches.
+This memory unlocks **surface compaction across air gaps**.
+Pre-v2.7.6, an alternating `w.w.w.w` floor row stayed
+permanently spread because the v2.6.2 guard blocked any
+move toward another same-rank cell. Post-v2.7.6, cells
+march toward each other tick by tick, settle into a
+contiguous block (`wwwww`) and stop — each cell's
+`horizFlowSource` arrests the final motion when it would
+oscillate.
+
+`setPixel` resets `horizFlowSource[idx]` to `0xFFFF`
+because the cell's content (and therefore its move
+history) just changed. A density swap, fall, or external
+mutation gives the new occupant fresh history — only the
+cell that just *flowed* to its current position carries
+the don't-flow-back constraint.
+
+### Known limitation: column-drain spread
+
+When a tall fluid column drains via pressure-mode 1-cell
+flow, escaping cells acquire `horizFlowSource` pointing
+back at the column's X. With multi-cell flow active on
+the floor row afterward, those cells can only flow AWAY
+from the column position (their memory blocks flow
+toward it). Result: a 6-tall water column on a 13-wide
+floor may end up partially clustered with stragglers
+near the walls (e.g., `w....wwww..w.`).
+
+This is bounded — cells stop when they hit a wall or
+another stuck cell — and far better than the pre-v2.7.6
+state where surfaces stayed permanently spread. Full
+contiguity would need a v3.0 mass-based model where
+mass transfers continuously between neighbors and the
+"history" concept is irrelevant.
 
 ## Pressure-aware flow (v2.7.4)
 

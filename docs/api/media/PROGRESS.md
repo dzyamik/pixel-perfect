@@ -35,8 +35,94 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v2.7.3 — formal benchmark fixture (`npm run bench`) | ✅ done | `v2.7.3` |
 | v2.7.4 — pressure-aware horizontal flow (sand & fluids) | ✅ done | `v2.7.4` |
 | v2.7.5 — pressure flow is 1-cell only (no skipping) | ✅ done | `v2.7.5` |
+| v2.7.6 — anti-oscillation memory enables surface compaction | ✅ done | `v2.7.6` |
 
-Test suite: 349 tests across 21 files. typecheck and lint clean.
+Test suite: 350 tests across 21 files. typecheck and lint clean.
+
+---
+
+## v2.7.6 — anti-oscillation memory (2026-05-01)
+
+User-reported: gas/liquid surfaces don't flatten — alternating
+wet/dry cells stay permanently spread instead of compacting
+into a contiguous block. After researching established falling-
+sand techniques (W-Shadow, jgallant, DwarfCorp, Powder Toy,
+Noita) the canonical fix is a mass-based model — Float per
+cell instead of binary occupancy — which is a v3.0 architectural
+change. v2.7.6 is the smaller-but-still-effective patch.
+
+### Fix
+
+The pre-v2.7.6 "same-rank-beyond" guard (added in v2.6.2 to
+prevent 2-tick pocket-dance oscillations) blocked legitimate
+chain compaction as a side effect. v2.7.6 replaces it with
+**per-cell move-source memory**:
+
+- New `ChunkedBitmap.horizFlowSource: Uint16Array` — each
+  cell stores the X coordinate it came from on its last
+  horizontal flow move. `0xFFFF` = no recent move.
+- `setPixel` resets the cell's entry to `0xFFFF` because
+  the occupant changed.
+- `stepFluid` reads the source's `cameFromX` and skips any
+  flow target equal to it (would just undo the prior move).
+  After a successful move, writes the source X to the
+  target's `horizFlowSource` slot.
+
+With oscillation prevented mechanically, the same-rank-beyond
+guard is removed entirely. Surface cells can now compact
+across air gaps:
+
+| Scenario | Pre-v2.7.6 | Post-v2.7.6 |
+|---|---|---|
+| Alternating `w.w.w.w.w.w.w` after 200 ticks | stays spread (guard blocks every move) | `wwwwwww......` (fully compacted) |
+| Mid-cluster pocket `gggggg.g#` | pocket pinned at x=7 mid-cluster | `ggggggg.#` (cluster compacted, pocket at wall edge) |
+| Sand pile internal gaps | 0 (v2.7.5) | 0 (preserved) |
+
+### Known limitation
+
+When a tall fluid column drains via pressure-mode 1-cell
+flow, escaping cells acquire `horizFlowSource` pointing back
+at the column's X. With multi-cell flow active on the floor
+row afterward, those cells can only flow AWAY from the column
+(memory blocks flow toward it). Result: a 6-tall water column
+on a 13-wide floor may end up partially clustered with
+stragglers near the walls (e.g., `w....wwww..w.`).
+
+Bounded and much better than pre-v2.7.6, but not a perfect
+contiguous block. Full contiguity would need the v3.0 mass-
+based model where mass transfers continuously between
+neighbors. See `docs-dev/05-simulation.md`.
+
+### Files involved
+
+- `src/core/ChunkedBitmap.ts` — `_horizFlowSource: Uint16Array`
+  field + lazy `horizFlowSource` getter; `setPixel` resets
+  the cell's entry to `0xFFFF`.
+- `src/core/algorithms/CellularAutomaton.ts` — `stepFluid`
+  reads `cameFromX`, skips matching flow targets, writes
+  `flowSource[targetIdx] = sourceX` after each move. Removes
+  the v2.6.2 same-rank-beyond guard.
+- `tests/core/algorithms/CellularAutomaton.test.ts` —
+  - New describe "anti-oscillation memory enables compaction
+    (v2.7.6)" with one test asserting alternating
+    `w.w.w.w.w.w.w` cells coalesce into a contiguous
+    `wwwwwww......` block.
+  - Existing v2.6.2 tests updated: `gas at ceiling` and
+    `air pocket between cluster and wall` now assert the
+    new behavior (cluster compacts, pocket migrates to
+    wall edge) instead of the old "pocket stays put."
+
+### Bench numbers (informational)
+
+Comparable to v2.7.5; one extra `Uint16Array` read at
+the top of each `stepFluid` call:
+
+- Settled world: ~5 µs/step.
+- Active pour: ~58 µs/step.
+- Full mixed bitmap: ~6.8 ms/step.
+- First-call seed: ~250 µs.
+
+---
 
 ---
 

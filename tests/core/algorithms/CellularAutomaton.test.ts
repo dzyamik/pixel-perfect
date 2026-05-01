@@ -1373,6 +1373,52 @@ describe('CellularAutomaton.step — per-material flowDistance (v2.7.0)', () => 
     });
 });
 
+describe('CellularAutomaton.step — anti-oscillation memory enables compaction (v2.7.6)', () => {
+    // Per-cell `horizFlowSource` records the X coordinate the
+    // cell came from on its last horizontal flow move. The next
+    // call's flow scan skips a target equal to that source X
+    // (the move would just undo the previous one). With this
+    // protection, the v2.6.2 same-rank-beyond guard is no
+    // longer needed and surface cells can compact across air
+    // gaps without oscillating.
+
+    it('alternating water cells on a flat floor coalesce into a contiguous block', () => {
+        // Seed `w.w.w.w.w.w.w` on the floor row. Pre-v2.7.6 the
+        // v2.6.2 guard kept these cells permanently spread; now
+        // they pull together over time.
+        const W = 13;
+        const H = 3;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [water, stone],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        for (let x = 0; x < W; x += 2) bm.setPixel(x, H - 2, water.id);
+
+        for (let t = 0; t < 200; t++) CellularAutomaton.step(bm, t);
+
+        // Floor row should contain a single contiguous block of
+        // water cells (no internal gaps within the wet region).
+        const floorRow: string = (() => {
+            let r = '';
+            for (let x = 0; x < W; x++) {
+                r += bm.getPixel(x, H - 2) === water.id ? 'w' : '.';
+            }
+            return r;
+        })();
+        const first = floorRow.indexOf('w');
+        const last = floorRow.lastIndexOf('w');
+        let internalGaps = 0;
+        for (let x = first; x <= last; x++) {
+            if (floorRow[x] !== 'w') internalGaps++;
+        }
+        expect(internalGaps).toBe(0);
+        // Cell count preserved.
+        const total = (floorRow.match(/w/g) ?? []).length;
+        expect(total).toBe(7);
+    });
+});
+
 describe('CellularAutomaton.step — pressure flow is 1-cell only (v2.7.5)', () => {
     // v2.7.4's multi-cell pressure flow could land 2+ cells
     // from the source, leaving the cell next to the original
@@ -1486,11 +1532,13 @@ describe('CellularAutomaton.step — pressure-aware flow (v2.7.4)', () => {
         expect(baseCols.size).toBeGreaterThanOrEqual(maxHeight);
     });
 
-    it('the v2.6.2 oscillation guard still applies when no pressure exists', () => {
-        // Same scenario as the v2.6.2 stability test: 6 gas cells
-        // pre-placed at the ceiling row with a 1-cell air pocket.
-        // No gas below the ceiling row → no pressure → guard
-        // fires → pocket pinned (no oscillation).
+    it('a mid-cluster air pocket migrates to the wall edge (v2.7.6)', () => {
+        // 6 gas cells with a 1-cell air pocket and an isolated
+        // gas cell next to the wall. Pre-v2.7.6, the v2.6.2
+        // same-rank-beyond guard pinned the pocket between the
+        // two clusters; v2.7.6's anti-oscillation memory
+        // (`horizFlowSource`) lets the cluster compact across
+        // the gap and pushes the pocket to the wall edge.
         const bm = gridBitmapV23([
             '##########',
             '#gggggg.g#',
@@ -1500,7 +1548,7 @@ describe('CellularAutomaton.step — pressure-aware flow (v2.7.4)', () => {
         for (let t = 0; t < 50; t++) CellularAutomaton.step(bm, t);
         expect(renderGridV23(bm)).toEqual([
             '##########',
-            '#gggggg.g#',
+            '#ggggggg.#',
             '#........#',
             '##########',
         ]);
@@ -1539,10 +1587,13 @@ describe('CellularAutomaton.step — gas leveling without oscillation (v2.6.2)',
         expect(total).toBe(6);
     });
 
-    it('air pocket between same-rank cluster and wall stays put', () => {
-        // Six gas cells pre-placed at the ceiling with a 1-cell air
-        // pocket at x=7 between (1..6) and (8). Pre-fix this dances
-        // forever; post-fix it's stable.
+    it('an air pocket between cluster and wall migrates and stops at the wall', () => {
+        // Pre-v2.7.6 (v2.6.2 same-rank-beyond guard): pocket
+        // pinned mid-cluster — non-flat surface.
+        // Post-v2.7.6 (anti-oscillation memory): cluster
+        // compacts across the pocket; pocket reaches the wall
+        // edge and stops there. Stable, contiguous, and visually
+        // flat.
         const bm = gridBitmapV23([
             '##########',
             '#gggggg.g#',
@@ -1550,10 +1601,9 @@ describe('CellularAutomaton.step — gas leveling without oscillation (v2.6.2)',
             '##########',
         ]);
         for (let t = 0; t < 50; t++) CellularAutomaton.step(bm, t);
-        // Same configuration after 50 ticks.
         expect(renderGridV23(bm)).toEqual([
             '##########',
-            '#gggggg.g#',
+            '#ggggggg.#',
             '#........#',
             '##########',
         ]);

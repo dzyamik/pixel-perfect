@@ -78,6 +78,27 @@ export class ChunkedBitmap {
     private _activeCells: Set<number> | null = null;
 
     /**
+     * Per-cell horizontal-flow memory used by the cellular-automaton
+     * step (v2.7.6). Each entry stores the **x coordinate** the
+     * current occupant came from on its last horizontal flow
+     * move, or `0xFFFF` if the cell has no recent move history.
+     *
+     * The sim consults this when scanning for a flow target — if
+     * the prospective target equals the source's `flowSource`
+     * value, the move would just undo the previous move, which is
+     * the exact pattern that produced 2-tick oscillations
+     * pre-v2.7.6. Skipping such targets allows the v2.6.2
+     * same-rank-beyond guard to be removed entirely, which in
+     * turn lets surface cells compact across air gaps.
+     *
+     * Lazy-allocated as `Uint16Array(width * height)` filled with
+     * `0xFFFF`. `setPixel` resets the cell's entry to `0xFFFF`
+     * because the cell's content (and therefore its move history)
+     * just changed.
+     */
+    private _horizFlowSource: Uint16Array | null = null;
+
+    /**
      * @throws If width/height/chunkSize are not positive integers, or if
      *         chunkSize does not divide width and height evenly.
      */
@@ -201,6 +222,13 @@ export class ChunkedBitmap {
         if (this._cellTimers !== null) {
             this._cellTimers[y * this.width + x] = 0;
         }
+        // Same reasoning for the v2.7.6 horizontal-flow memory:
+        // the move-from-where history belonged to the previous
+        // occupant, not the new one. Reset to the no-history
+        // sentinel.
+        if (this._horizFlowSource !== null) {
+            this._horizFlowSource[y * this.width + x] = 0xFFFF;
+        }
         // Once active-cell tracking is on, propagate activation to
         // the changed cell + its 8-neighborhood so the sim picks up
         // anything that might want to fall, flow, ignite, or settle
@@ -251,6 +279,31 @@ export class ChunkedBitmap {
             this._cellTimers = new Uint8Array(this.width * this.height);
         }
         return this._cellTimers;
+    }
+
+    /**
+     * Lazy-allocated `Uint16Array(width * height)` of per-cell
+     * horizontal-flow source-X memory used by the v2.7.6 anti-
+     * oscillation rule in `CellularAutomaton.step`. `0xFFFF`
+     * means "no recent horizontal move."
+     *
+     * On first read the array is initialized to all-`0xFFFF`.
+     * The sim writes to it after every successful horizontal
+     * flow move (`flowSource[targetIdx] = sourceX`); reading
+     * back at the next call lets the moved cell skip a flow
+     * back to the same source — preventing 2-tick oscillation
+     * cycles that would otherwise force a conservative
+     * same-rank-beyond guard.
+     *
+     * `setPixel` resets the cell's entry to `0xFFFF` because the
+     * occupant changed.
+     */
+    get horizFlowSource(): Uint16Array {
+        if (this._horizFlowSource === null) {
+            this._horizFlowSource = new Uint16Array(this.width * this.height);
+            this._horizFlowSource.fill(0xFFFF);
+        }
+        return this._horizFlowSource;
     }
 
     /**
