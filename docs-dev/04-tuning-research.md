@@ -199,16 +199,20 @@ asserts upper bounds on step cost for canonical scenarios.
 2. ✅ **Same for `settleAfterTicks`** — landed in v2.6.1. Throws
    when `settlesTo` is set without `settleAfterTicks`, or when
    the threshold is outside `1..256`.
-3. **Worked example in TSDoc** for `burnDuration` and
-   `settleAfterTicks` clarifying the off-by-one.
+3. ✅ **Worked example in TSDoc** for `burnDuration` and
+   `settleAfterTicks` — landed in v2.7.1. Both fields' TSDoc now
+   walks through a tick-by-tick example so the "lifetime in ticks"
+   semantics are unambiguous.
 4. ✅ **Per-material `flowDistance`** — landed in v2.7.0.
    `Material.flowDistance?: number` (validated `0..16` at
    registration) overrides the module-default `4` so users
    can tune lava=2, water=4, gas=6, etc. independently. Sand
    still hard-codes `0` (no horizontal flow).
-5. **Optional `'fire' + 'water' → 'air'` reaction** if the
-   density-swap-only behavior surprises users. Pure feature, not
-   a bug fix.
+5. ✅ **`'fire' + 'water' → 'air'` reaction** — landed in v2.7.2.
+   `stepFire` now checks the four cardinal neighbors for a
+   `'water'`-simulation cell BEFORE the ignition pass and the
+   age tick; if found, both cells turn to air. Cardinal-only
+   (diagonals don't react) keeps the rule local.
 6. **Formal benchmark fixture** for v2.4 step cost.
 
 Items 3, 5, 6 remain opt-in improvements; not v2.x blockers.

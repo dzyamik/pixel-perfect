@@ -30,8 +30,53 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v2.6.1 — enforce timer-uint8 ranges at material registration | ✅ done | `v2.6.1` |
 | v2.6.2 — fix gas leveling oscillation | ✅ done | `v2.6.2` |
 | v2.7.0 — per-material flowDistance | ✅ done | `v2.7.0` |
+| v2.7.1 — TSDoc worked examples (timer fields) | ✅ done | `v2.7.1` |
+| v2.7.2 — water extinguishes fire on contact | ✅ done | `v2.7.2` |
 
-Test suite: 342 tests across 21 files. typecheck and lint clean.
+Test suite: 345 tests across 21 files. typecheck and lint clean.
+
+---
+
+## v2.7.1 / v2.7.2 — sim TSDoc + reactions (2026-05-01)
+
+### v2.7.1 — Worked examples in TSDoc
+
+`Material.burnDuration` and `Material.settleAfterTicks` TSDoc
+gained tick-by-tick worked examples so the "lifetime in ticks"
+semantics are unambiguous (no more "is it N or N-1 ticks?"
+guessing). Closes research-doc action item #3.
+
+### v2.7.2 — Water extinguishes fire on contact
+
+`stepFire` now checks the four cardinal neighbors for a
+`'water'`-simulation cell BEFORE the ignition pass and the
+age tick; if found, BOTH cells turn to air. Cardinal-only
+(diagonals don't react) keeps the rule local and matches user
+intuition (you don't put out a fire by waving water at a
+distance). Closes research-doc action item #5.
+
+The previous behavior — water density-swapping into fire,
+fire pushed out — would have been the implementation choice if
+the priority were physics realism (water can't actually destroy
+fire instantaneously). It surprised users in demo 09 who poured
+water on burning wood and expected the fire to die. The
+reaction now matches that expectation.
+
+### Files involved (v2.7.2)
+
+- `src/core/algorithms/CellularAutomaton.ts` — `stepFire`
+  prepended with a 4-cardinal water check; `cardinals` array
+  factored out so the ignition pass and the new check share
+  the same direction list.
+- `tests/core/algorithms/CellularAutomaton.test.ts` — describe
+  block "fire density-swap & water reaction" rewritten:
+  `water above fire` flipped from "no extinguish" to "both
+  consumed"; new tests for water-beside-fire,
+  water-diagonal-with-stones (cardinal-only), and
+  water-soaked-fire-doesn't-ignite-wood. The other
+  density-swap cases (gas, sand) are unchanged.
+
+---
 
 ---
 

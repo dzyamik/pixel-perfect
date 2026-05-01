@@ -101,9 +101,22 @@ export interface Material {
      * `Uint8Array` saturates at 255, so a threshold above 256 would
      * never be reached and the cell would silently never promote).
      *
+     * Worked example: `settleAfterTicks: 3`. A sand cell that
+     * lands and can't move:
+     *
+     *  - Tick 0 (just landed): didn't move; timer 0 → 1.
+     *  - Tick 1: didn't move; timer 1 → 2.
+     *  - Tick 2: didn't move; timer 2 → 3, threshold reached → promote.
+     *
+     * So the cell is promoted on the *third* stationary tick.
+     * `settleAfterTicks: N` means "promote on the Nth stationary
+     * tick" — the cell lives `N - 1` full ticks as the moving
+     * variant before the Nth tick promotes it. For ~½ s at 60 fps
+     * use `settleAfterTicks: 30`; demo 09 uses this.
+     *
      * Bridges fluid sim and physics: a sand pile that's been at
-     * rest for 30 ticks (~0.5 s at 60 fps) becomes part of the
-     * terrain and dynamic bodies can stand on it.
+     * rest long enough becomes part of the terrain and dynamic
+     * bodies can stand on it.
      */
     settlesTo?: number;
     settleAfterTicks?: number;
@@ -125,6 +138,19 @@ export interface Material {
      * at 255, so values above 256 would never reach the threshold
      * and the cell would silently burn forever). Ignored for
      * non-fire materials.
+     *
+     * Worked example: `burnDuration: 4`. A freshly-lit fire cell:
+     *
+     *  - Tick 0 (just lit): timer 0 → 1.
+     *  - Tick 1: timer 1 → 2.
+     *  - Tick 2: timer 2 → 3.
+     *  - Tick 3: timer 3 → 4, threshold reached → cell turns to air.
+     *
+     * So the cell is alive at the start of ticks 0..3 and dies
+     * during tick 3. `burnDuration: N` means "die on the Nth tick"
+     * (lives N ticks total, including the tick it was lit on).
+     * For demo 09's "burn long enough to walk a wood plank" feel
+     * we use `burnDuration: 40` (~⅔ s at 60 fps).
      */
     burnDuration?: number;
     /**

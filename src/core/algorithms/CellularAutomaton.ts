@@ -441,9 +441,17 @@ function maybeSettle(
 }
 
 /**
- * Fire step: ignite one flammable neighbor (up, left, right, down),
- * then increment the cell's own burn timer; once the timer reaches
- * `burnDuration`, the cell turns to air.
+ * Fire step: water-extinguish check → ignite one flammable
+ * neighbor → age the cell's own burn timer.
+ *
+ * **Water extinguishes (v2.7.2)**: if any of the four cardinal
+ * neighbors is a `'water'`-simulation cell, both the fire and
+ * the water turn to air this tick. The check runs BEFORE
+ * ignition and aging, so a fire cell adjacent to water never
+ * spreads or burns down a wood chain — water always wins. The
+ * reaction is one fire ↔ one water per tick (the first water
+ * neighbor encountered); a fire fully encased in water takes a
+ * single tick to die regardless.
  *
  * The new fire cell's timer is auto-reset by `setPixel`, so each
  * fresh ignition starts from 0 and burns for the full duration.
@@ -467,6 +475,27 @@ function stepFire(
     H: number,
     movedThisTick: Set<number>,
 ): void {
+    // Water extinguishment — if a 4-neighbor is water, both die.
+    // Cardinal-only (no diagonals) so a fire cell separated from
+    // water by a corner still burns; a sheet of water actually
+    // touching the fire kills it.
+    const cardinals: readonly (readonly [number, number])[] = [
+        [0, -1], [-1, 0], [1, 0], [0, 1],
+    ];
+    for (const dir of cardinals) {
+        const nx = x + dir[0]!;
+        const ny = y + dir[1]!;
+        if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+        const neighborId = bitmap.getPixel(nx, ny);
+        if (neighborId === 0) continue;
+        const neighborMat = materials.get(neighborId);
+        if (neighborMat?.simulation !== 'water') continue;
+        bitmap.setPixel(x, y, 0);
+        bitmap.setPixel(nx, ny, 0);
+        movedThisTick.add(ny * W + nx);
+        return;
+    }
+
     const burnDuration = material.burnDuration ?? 60;
     const timers = bitmap.cellTimers;
     const idx = y * W + x;
@@ -475,10 +504,7 @@ function stepFire(
     // Try to ignite a flammable neighbor (up / left / right / down).
     // Order is fixed (no L/R alternation): fire spread is slow
     // enough already that L/R bias isn't visible.
-    const dirs: readonly (readonly [number, number])[] = [
-        [0, -1], [-1, 0], [1, 0], [0, 1],
-    ];
-    for (const dir of dirs) {
+    for (const dir of cardinals) {
         const nx = x + dir[0]!;
         const ny = y + dir[1]!;
         if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;

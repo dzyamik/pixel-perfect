@@ -1209,11 +1209,12 @@ describe('CellularAutomaton.step — same-rank fluids do not swap', () => {
     });
 });
 
-describe('CellularAutomaton.step — fire is displaceable by density swap', () => {
+describe('CellularAutomaton.step — fire density-swap & water reaction', () => {
     // Fire's `simulation` is `'fire'`, not `'static'`. Density swaps
     // from neighboring fluids treat fire as a normal rank-2 cell and
-    // can move it. Documented behavior — not a "water extinguishes
-    // fire" interaction. See docs-dev/04-tuning-research.md.
+    // can move it. The exception is water: as of v2.7.2, water
+    // adjacent to fire extinguishes both cells before any density
+    // swap or ignition fires.
     it('gas below fire — gas rises, fire pushed down', () => {
         const bm = gridBitmapV23([
             'f',
@@ -1224,14 +1225,49 @@ describe('CellularAutomaton.step — fire is displaceable by density swap', () =
         expect(bm.getPixel(0, 1)).toBe(fire.id);
     });
 
-    it('water above fire — water sinks, fire pushed up (no extinguish)', () => {
+    it('water above fire — both consumed (water extinguishes, v2.7.2)', () => {
         const bm = gridBitmapV23([
             'w',
             'f',
         ]);
         CellularAutomaton.step(bm, 0);
+        expect(bm.getPixel(0, 0)).toBe(0);
+        expect(bm.getPixel(0, 1)).toBe(0);
+    });
+
+    it('water beside fire — both consumed', () => {
+        const bm = gridBitmapV23([
+            'fw',
+        ]);
+        CellularAutomaton.step(bm, 0);
+        expect(bm.getPixel(0, 0)).toBe(0);
+        expect(bm.getPixel(1, 0)).toBe(0);
+    });
+
+    it('water diagonal to fire (cardinal cells stoned) does NOT extinguish', () => {
+        // Fire at (0,0), water at (1,1) — diagonal. The cells
+        // between them ((1,0) and (0,1)) are stone, so water
+        // can't flow to be cardinal-adjacent and the reaction
+        // (cardinal-only) doesn't fire. Both survive.
+        const bm = gridBitmapV23([
+            'f#',
+            '#w',
+        ]);
+        CellularAutomaton.step(bm, 0);
         expect(bm.getPixel(0, 0)).toBe(fire.id);
-        expect(bm.getPixel(0, 1)).toBe(water.id);
+        expect(bm.getPixel(1, 1)).toBe(water.id);
+    });
+
+    it('water-soaked fire does not ignite adjacent wood', () => {
+        // Fire next to water AND wood. The water reaction fires
+        // before the ignition pass, so the wood survives.
+        const bm = gridBitmapV23([
+            'wfW',
+        ]);
+        CellularAutomaton.step(bm, 0);
+        expect(bm.getPixel(0, 0)).toBe(0);
+        expect(bm.getPixel(1, 0)).toBe(0);
+        expect(bm.getPixel(2, 0)).toBe(wood.id);
     });
 
     it('sand above fire — sand sinks, fire pushed up', () => {
