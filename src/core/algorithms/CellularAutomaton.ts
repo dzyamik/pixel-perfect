@@ -325,16 +325,30 @@ function stepFluid(
     //
     // Oscillation guard (v2.6.2): when scanning for the farthest
     // air target, also stop if the cell ONE PAST the candidate is
-    // a same-rank fluid. That neighbor would otherwise also try
-    // to fill the pocket from its side on its own tick, and the
-    // per-tick goRight flip combined with the per-cell L/R
-    // preference makes the pocket dance back and forth between
-    // them forever — visible as the "gas can't establish a level"
-    // bug. The scan stops at the largest safe d, which yields a
-    // valid (possibly shorter) target if one exists, or skips this
-    // side entirely if even d=1 is sandwiched. The air pocket
-    // settles next to whatever non-same-rank edge the cluster
-    // happens to butt up against.
+    // a same-rank fluid. Two same-rank cells flanking a single air
+    // pocket would otherwise dance the pocket back and forth every
+    // tick — visible as the "gas can't establish a level" bug.
+    //
+    // Pressure override (v2.7.4): the guard above is too
+    // conservative for buried cells. A liquid cell at the bottom
+    // of a tall column has same-rank cells on its sides AND above;
+    // the pocket-dance problem doesn't apply because the cells
+    // above are physically pressing it. Allow the move when the
+    // source has a same-rank cell in the OPPOSITE direction of
+    // its own motion (i.e. above for sinking fluids, below for
+    // rising gas) — that's the pressure signal. Tall water columns
+    // and ceiling-piled gas spread aggressively at their bases /
+    // tops; small isolated pockets still pin against walls instead
+    // of oscillating.
+    const pressureY = y - yDir;
+    let underPressure = false;
+    if (pressureY >= 0 && pressureY < H) {
+        const pressureId = bitmap.getPixel(x, pressureY);
+        if (pressureId !== 0 && densityRank(pressureId, materials) === srcRank) {
+            underPressure = true;
+        }
+    }
+
     if (flowDist > 0) {
         for (const sx of sides) {
             let target = -1;
@@ -342,11 +356,16 @@ function stepFluid(
                 const nx = x + sx * d;
                 if (nx < 0 || nx >= W) break;
                 if (bitmap.getPixel(nx, y) !== 0) break;
-                const beyondX = nx + sx;
-                if (beyondX >= 0 && beyondX < W) {
-                    const beyondId = bitmap.getPixel(beyondX, y);
-                    if (beyondId !== 0 && densityRank(beyondId, materials) === srcRank) {
-                        break;
+                if (!underPressure) {
+                    const beyondX = nx + sx;
+                    if (beyondX >= 0 && beyondX < W) {
+                        const beyondId = bitmap.getPixel(beyondX, y);
+                        if (
+                            beyondId !== 0
+                            && densityRank(beyondId, materials) === srcRank
+                        ) {
+                            break;
+                        }
                     }
                 }
                 target = nx;
@@ -364,17 +383,29 @@ function stepFluid(
 }
 
 /**
- * Sand step: density-aware fall + air-only diagonal slide. Wraps
- * {@link stepFluid} (with `yDir=+1`, `flowDist=0`, sand rank), then
- * runs settling logic if the cell didn't move.
+ * Sand step: density-aware fall + air-only diagonal slide + a
+ * pressure-based horizontal escape (v2.7.4) for buried grains.
  *
- * Active-set bookkeeping: `setPixel` auto-marks moved cells, so the
- * fall path needs no explicit re-add. A non-moving cell drops out
- * of the active set unless this material has settling configured,
- * in which case the rest-timer needs to keep ticking — we mark
- * the cell active explicitly until either it moves (because a
- * neighbor opened up) or it promotes (`setPixel` fires when
- * settling and the new id's auto-mark covers re-activation).
+ * Sand normally has `flowDistance = 0` (granular: only falls /
+ * slides diagonally, no horizontal flow). That gives a 45° angle
+ * of repose, which produces visibly-vertical piles when sand is
+ * poured faster than diagonals can carry it away.
+ *
+ * To break this, we count consecutive same-id cells stacked
+ * directly above. When the stack reaches `SAND_PRESSURE_THRESHOLD`
+ * cells, the bottom-most grain is treated as "buried" and gets a
+ * mild horizontal flow (`SAND_PRESSURE_FLOW_DIST`) so the pile's
+ * base spreads outward. Top of the pile keeps the granular look;
+ * the base widens until pressure relieves itself.
+ *
+ * Active-set bookkeeping: `setPixel` auto-marks moved cells, so
+ * the fall / horizontal-flow paths need no explicit re-add. A
+ * non-moving cell drops out of the active set unless this material
+ * has settling configured, in which case the rest-timer needs to
+ * keep ticking — we mark the cell active explicitly until either
+ * it moves (because a neighbor opened up) or it promotes
+ * (`setPixel` fires when settling and the new id's auto-mark
+ * covers re-activation).
  */
 function stepSand(
     bitmap: ChunkedBitmap,
@@ -387,9 +418,17 @@ function stepSand(
     goRight: boolean,
     movedThisTick: Set<number>,
 ): void {
+    let pressureFlow = 0;
+    let stack = 0;
+    for (let yy = y - 1; yy >= 0 && stack < SAND_PRESSURE_THRESHOLD; yy--) {
+        if (bitmap.getPixel(x, yy) !== id) break;
+        stack++;
+    }
+    if (stack >= SAND_PRESSURE_THRESHOLD) pressureFlow = SAND_PRESSURE_FLOW_DIST;
+
     const moved = stepFluid(
         bitmap, materials, x, y, id, W, H, goRight, movedThisTick,
-        +1, RANK_SAND, 0,
+        +1, RANK_SAND, pressureFlow,
     );
     if (moved) return;
 
@@ -408,6 +447,23 @@ function stepSand(
     if (material.settlesTo === undefined || material.settleAfterTicks === undefined) return;
     bitmap.markActive(x, y);
 }
+
+/**
+ * Number of consecutive same-id cells stacked directly above a
+ * sand grain that triggers the pressure-based horizontal escape.
+ * 3 means "a sand cell with at least 3 grains above it gets a
+ * mild horizontal flow." Lower → flatter piles, more water-like.
+ * Higher → more vertical piles, more granular.
+ */
+const SAND_PRESSURE_THRESHOLD = 3;
+
+/**
+ * Horizontal flow distance applied to sand grains under pressure
+ * (see {@link SAND_PRESSURE_THRESHOLD}). Smaller than the default
+ * fluid flow distance (`4`) because sand is still granular — the
+ * pressure rule is a release valve, not a full liquefaction.
+ */
+const SAND_PRESSURE_FLOW_DIST = 2;
 
 /**
  * Increments the at-rest timer for a non-moving sand cell and, if

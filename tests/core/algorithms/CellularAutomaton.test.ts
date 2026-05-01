@@ -1373,6 +1373,99 @@ describe('CellularAutomaton.step — per-material flowDistance (v2.7.0)', () => 
     });
 });
 
+describe('CellularAutomaton.step — pressure-aware flow (v2.7.4)', () => {
+    // Buried fluid cells (same-rank cell in the OPPOSITE direction
+    // of motion) override the v2.6.2 same-rank-beyond guard, so
+    // tall columns and stacked piles spread aggressively at the
+    // base / top instead of forming sand-like vertical piles.
+    // Sand cells do the same with a stricter threshold and a
+    // smaller flow distance — granular when shallow, fluid-ish
+    // when buried.
+
+    it('a tall water column on a flat floor finishes collapsing within column-height ticks', () => {
+        const W = 13;
+        const H = 8;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [water, stone],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        const colHeight = 6;
+        for (let y = 0; y < colHeight; y++) bm.setPixel(W >> 1, y, water.id);
+
+        let flatAt = -1;
+        for (let t = 0; t < 50; t++) {
+            CellularAutomaton.step(bm, t);
+            let above = 0;
+            for (let y = 0; y < H - 2; y++) {
+                for (let x = 0; x < W; x++) {
+                    if (bm.getPixel(x, y) === water.id) above++;
+                }
+            }
+            if (above === 0) {
+                flatAt = t;
+                break;
+            }
+        }
+        expect(flatAt).toBeGreaterThan(0);
+        // With pressure-aware flow, leveling tracks column height
+        // closely — pre-v2.7.4 the column drained slowly because
+        // interior cells couldn't push past their same-rank
+        // neighbors.
+        expect(flatAt).toBeLessThanOrEqual(colHeight + 2);
+    });
+
+    it('a tall sand column pyramids with a base wider than its height', () => {
+        // 8-tall sand column → after 100 ticks the pyramid base
+        // should be ≥ pyramid height. Pre-v2.7.4 the 45° angle
+        // gave height ≈ base/2 (so a 4-tall pile would have
+        // base 9), which is "very vertical" relative to a real
+        // pile of granular material.
+        const W = 17;
+        const H = 12;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [sand, stone],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        for (let y = 0; y < 8; y++) bm.setPixel(W >> 1, y, sand.id);
+        for (let t = 0; t < 100; t++) CellularAutomaton.step(bm, t);
+
+        let maxHeight = 0;
+        const baseCols = new Set<number>();
+        for (let x = 0; x < W; x++) {
+            for (let y = 0; y < H - 1; y++) {
+                if (bm.getPixel(x, y) === sand.id) {
+                    const h = H - 1 - y;
+                    if (h > maxHeight) maxHeight = h;
+                }
+            }
+            if (bm.getPixel(x, H - 2) === sand.id) baseCols.add(x);
+        }
+        expect(baseCols.size).toBeGreaterThanOrEqual(maxHeight);
+    });
+
+    it('the v2.6.2 oscillation guard still applies when no pressure exists', () => {
+        // Same scenario as the v2.6.2 stability test: 6 gas cells
+        // pre-placed at the ceiling row with a 1-cell air pocket.
+        // No gas below the ceiling row → no pressure → guard
+        // fires → pocket pinned (no oscillation).
+        const bm = gridBitmapV23([
+            '##########',
+            '#gggggg.g#',
+            '#........#',
+            '##########',
+        ]);
+        for (let t = 0; t < 50; t++) CellularAutomaton.step(bm, t);
+        expect(renderGridV23(bm)).toEqual([
+            '##########',
+            '#gggggg.g#',
+            '#........#',
+            '##########',
+        ]);
+    });
+});
+
 describe('CellularAutomaton.step — gas leveling without oscillation (v2.6.2)', () => {
     // Pre-v2.6.2 the per-cell L/R flip combined with multi-cell flow
     // made an air pocket between two same-rank clusters dance back

@@ -122,6 +122,47 @@ of `step()`; not exposed.
 
 ---
 
+## Pressure-aware flow (v2.7.4)
+
+The v2.6.2 same-rank-beyond guard prevents oscillation but is too
+conservative for buried cells. A liquid cell at the bottom of a
+tall column has same-rank cells on its sides AND above; the
+pocket-dance oscillation problem doesn't apply because the cells
+above are physically pressing it.
+
+`stepFluid` checks for **pressure**: the cell directly opposite
+the motion direction. For sinking fluids (water/oil) that's the
+cell *above*; for rising gas, the cell *below*. If the pressure
+cell is the same rank as the source, the source overrides the
+oscillation guard and flows aggressively into the air past any
+same-rank chain.
+
+Result:
+
+- Tall water columns drain in ~`colHeight` ticks (the leveling
+  test asserts `≤ colHeight + 2`).
+- Gas piling at a ceiling spreads under pressure from gas
+  rising from below; once the column drains and individual
+  cells have only walls or air below them, the v2.6.2 guard
+  takes over and pockets pin to walls.
+- Small isolated pockets (e.g. a single air gap between two
+  same-rank fluid cells with no same-rank cell on the third
+  side) still pin instead of oscillating — the pressure
+  override only fires when there's actual pressure.
+
+`stepSand` reuses the same idea via two module constants:
+
+- `SAND_PRESSURE_THRESHOLD = 3` — minimum sand cells stacked
+  directly above a grain before the pressure rule fires.
+- `SAND_PRESSURE_FLOW_DIST = 2` — horizontal flow distance for
+  buried grains. Smaller than fluid `flowDistance` because
+  sand stays granular near the surface; the pressure rule is
+  a release valve, not full liquefaction.
+
+Visible effect: tall sand piles spread at the base
+(`baseWidth ≥ pileHeight`) instead of forming the very-vertical
+columns the strict 45° angle of repose would produce.
+
 ## Multi-cell horizontal flow (`FLUID_FLOW_DIST`)
 
 A blocked fluid tries the diagonal-down path; if that

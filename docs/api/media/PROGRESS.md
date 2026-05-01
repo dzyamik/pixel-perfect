@@ -33,10 +33,73 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v2.7.1 — TSDoc worked examples (timer fields) | ✅ done | `v2.7.1` |
 | v2.7.2 — water extinguishes fire on contact | ✅ done | `v2.7.2` |
 | v2.7.3 — formal benchmark fixture (`npm run bench`) | ✅ done | `v2.7.3` |
+| v2.7.4 — pressure-aware horizontal flow (sand & fluids) | ✅ done | `v2.7.4` |
 
-Test suite: 345 tests across 21 files. typecheck and lint clean.
+Test suite: 348 tests across 21 files. typecheck and lint clean.
 
 All v2.5 research-doc action items now closed.
+
+---
+
+## v2.7.4 — pressure-aware horizontal flow (2026-05-01)
+
+User-reported: gas/liquid still pile vertically when poured ("look
+like sand"); sand piles are too vertical (need a critical-pressure
+mechanism for faster spread at the base). Both symptoms point at
+the same gap — the v2.6.2 oscillation guard blocks legitimate
+chain compaction in the column interior, and sand has no
+horizontal flow at all.
+
+### Fix
+
+**Pressure check in `stepFluid`**: when the same-rank-beyond
+guard would block flow, check if the source has a same-rank cell
+in the OPPOSITE direction of its motion (above for sinking fluids,
+below for rising gas). If yes, the source is "under pressure"
+from a stack and the move is allowed despite the same-rank
+neighbor — this is the chain-compaction case, not a 2-cell
+oscillation.
+
+**Pressure check in `stepSand`**: count consecutive same-id cells
+stacked directly above the grain. At threshold (`3` cells), the
+grain gets a mild horizontal flow (`SAND_PRESSURE_FLOW_DIST = 2`).
+Top of the pile keeps the granular look; the base widens until
+pressure relieves itself.
+
+### Trade-off
+
+- Per-step cost rose ~30% on a typical active pour (44 → 58 µs)
+  because `stepFluid` now does an extra `getPixel` for the
+  pressure check. Settled-world cost is unchanged. Still
+  comfortably sub-millisecond.
+- The pressure constants (`SAND_PRESSURE_THRESHOLD = 3`,
+  `SAND_PRESSURE_FLOW_DIST = 2`) are module-private. Could be
+  promoted to `Material.*` overrides if users need different
+  bury thresholds per material.
+
+### Files involved
+
+- `src/core/algorithms/CellularAutomaton.ts` — `stepFluid`
+  computes `underPressure` once per call and skips the
+  same-rank-beyond guard when set; `stepSand` counts the
+  vertical sand stack and threads `pressureFlow` into
+  `stepFluid`.
+- `tests/core/algorithms/CellularAutomaton.test.ts` — new
+  describe block "pressure-aware flow (v2.7.4)" with three
+  tests: a 6-tall water column drains in `≤ height + 2`
+  ticks; an 8-tall sand column pyramids with
+  `baseWidth ≥ pileHeight`; the v2.6.2 oscillation guard
+  still pins ceiling-gas pockets when no pressure exists.
+
+### Numbers from the probe (informational)
+
+- Water column 6×9 with floor: drained in 5 ticks.
+- Sand column 8×17: pyramid maxHeight=2, base=5 (was a much
+  taller pillar before).
+- Gas pile in sealed 13×8 box, 6-cell pour: 6 cells reach
+  ceiling row.
+
+---
 
 ---
 
@@ -280,14 +343,17 @@ list.
   correctness pattern, dynamic-body spawn, image-as-terrain
   stamping, and four fluid-material kinds.
 - **Extended (post-v2.7.3)**: `02-click-to-carve`,
-  `04-falling-debris`, `08-sprite-playground`. 9 more
-  snippets: carve/deposit on pointer, wheel brush resize,
-  chunk-repaint counting, debris callback wiring, per-frame
-  extraction, contour-as-Graphics rendering, AABB-pre-check
-  pattern, runtime sprite-texture swap, alpha-outline
-  visualization. **19 snippets across 6 demos** in the
-  recipes index. Demos 01, 05, 06 are still un-annotated;
-  pick them up when there's a high-value snippet to extract.
+  `04-falling-debris`, `06-worms-style`,
+  `08-sprite-playground`. 13 more snippets: carve/deposit on
+  pointer, wheel brush resize, chunk-repaint counting,
+  debris callback wiring, per-frame extraction, contour-as-
+  Graphics rendering, character body with fixed rotation,
+  camera follow + bounds, grounded-via-bitmap-probe,
+  explosion carve+impulse, AABB-pre-check pattern, runtime
+  sprite-texture swap, alpha-outline visualization.
+  **23 snippets across 7 demos** in the recipes index.
+  Demos 01 and 05 are still un-annotated (low recipe value —
+  basic rendering and a simpler subset of demo 08).
 
 ### Marker grammar
 
