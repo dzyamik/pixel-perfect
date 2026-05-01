@@ -32,8 +32,39 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v2.7.0 — per-material flowDistance | ✅ done | `v2.7.0` |
 | v2.7.1 — TSDoc worked examples (timer fields) | ✅ done | `v2.7.1` |
 | v2.7.2 — water extinguishes fire on contact | ✅ done | `v2.7.2` |
+| v2.7.3 — formal benchmark fixture (`npm run bench`) | ✅ done | `v2.7.3` |
 
 Test suite: 345 tests across 21 files. typecheck and lint clean.
+
+All v2.5 research-doc action items now closed.
+
+---
+
+## v2.7.3 — formal benchmark fixture (2026-05-01)
+
+`tests/perf/CellularAutomaton.bench.ts` exercises four canonical
+sim scenarios via Vitest's `bench` API:
+
+- **Settled world** (active set empty) — lazy early-out check.
+- **Active pour** (~100 falling water cells) — typical busy demo.
+- **Full mixed bitmap** (256×128 = 32 K cells, all mobile) —
+  worst case.
+- **First-call seed scan** — one-shot O(W×H) cost.
+
+Numbers from a dev laptop (i7, Node 22) recorded in
+`docs-dev/04-tuning-research.md`. Informational; no regression
+assertions because thresholds are hardware-dependent. Run via
+`npm run bench`; compare before/after a change to see whether a
+patch helped or hurt step cost.
+
+### Files involved
+
+- `tests/perf/CellularAutomaton.bench.ts` — bench fixture.
+- `package.json` — `"bench": "vitest bench --run"` script.
+- `docs-dev/04-tuning-research.md` — table of measured numbers
+  + closure of action item #6.
+
+---
 
 ---
 

@@ -1,4 +1,4 @@
-/**
+const n=`/**
  * Demo 04 — falling debris.
  *
  * Carve through anchored terrain to detach pieces; detached pieces
@@ -17,7 +17,7 @@
  * detect → enqueue → body creation pipeline runs even without a
  * user-initiated carve).
  *
- * `extractDebris` runs every frame, so as soon as a carve severs a
+ * \`extractDebris\` runs every frame, so as soon as a carve severs a
  * neck the attached shelf detaches in the same frame.
  *
  * Visual check:
@@ -97,7 +97,7 @@ class FallingDebrisScene extends Phaser.Scene {
 
         // @snippet terrain-with-debris-callback
         // @title Hook into automatic debris detection
-        // @desc `onDebrisCreated` fires once per island the
+        // @desc \`onDebrisCreated\` fires once per island the
         // @desc DebrisDetector finds — passing the new dynamic
         // @desc body's id, its contour (in bitmap coords), and
         // @desc the dominant material. Use it to spawn whatever
@@ -217,12 +217,12 @@ class FallingDebrisScene extends Phaser.Scene {
 
     // @snippet extract-debris-each-frame
     // @title Run debris extraction every frame
-    // @desc `terrain.extractDebris()` floods the bitmap from
+    // @desc \`terrain.extractDebris()\` floods the bitmap from
     // @desc anchor cells (bottom row by default), finds any
     // @desc unanchored islands, carves them out of the static
     // @desc bitmap, and queues them as dynamic-body work. The
-    // @desc `onDebrisCreated` callback fires per body when
-    // @desc `terrain.update()` flushes the queue. Calling this
+    // @desc \`onDebrisCreated\` callback fires per body when
+    // @desc \`terrain.update()\` flushes the queue. Calling this
     // @desc every frame means severing a neck detaches the
     // @desc shelf in the same frame — no waiting for pointer-up.
     // @desc Cost is O(width × height) per call; cheap for
@@ -250,11 +250,11 @@ class FallingDebrisScene extends Phaser.Scene {
     // @snippet contour-graphics-from-debris
     // @title Render a debris contour as a rotatable Graphics
     // @desc The contour is in bitmap coords; the body's scene
-    // @desc position is `(centroid + originPx)`. To rotate the
+    // @desc position is \`(centroid + originPx)\`. To rotate the
     // @desc Graphics around the body's center of mass, draw the
     // @desc contour points MINUS the centroid (i.e. as local
     // @desc coordinates) and let Phaser handle the per-frame
-    // @desc transform from `b2Body_GetPosition / GetRotation`.
+    // @desc transform from \`b2Body_GetPosition / GetRotation\`.
     private spawnDebrisVisual(
         bodyId: BodyId,
         contour: Contour,
@@ -389,3 +389,4 @@ bootSandbox({
 });
 
 mountCodePanel(demoSource);
+`;export{n as d};

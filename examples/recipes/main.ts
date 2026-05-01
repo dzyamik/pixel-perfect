@@ -10,8 +10,11 @@
 
 import { parseSnippets, renderCard } from '../_shared/code-panel.js';
 
+import demo02Source from '../02-click-to-carve/main.ts?raw';
 import demo03Source from '../03-physics/main.ts?raw';
+import demo04Source from '../04-falling-debris/main.ts?raw';
 import demo07Source from '../07-image-terrain/main.ts?raw';
+import demo08Source from '../08-sprite-playground/main.ts?raw';
 import demo09Source from '../09-falling-sand/main.ts?raw';
 
 interface DemoEntry {
@@ -23,16 +26,34 @@ interface DemoEntry {
 
 const demos: readonly DemoEntry[] = [
     {
+        slug: '02-click-to-carve',
+        title: '02 — click to carve',
+        blurb: 'Pointer input on top of destructible terrain.',
+        source: demo02Source,
+    },
+    {
         slug: '03-physics',
         title: '03 — physics colliders',
         blurb: 'Box2D wired to destructible terrain.',
         source: demo03Source,
     },
     {
+        slug: '04-falling-debris',
+        title: '04 — falling debris',
+        blurb: 'Carve detaches islands as dynamic bodies.',
+        source: demo04Source,
+    },
+    {
         slug: '07-image-terrain',
         title: '07 — image-based terrain',
         blurb: 'Stamp PNG / canvas masks onto the bitmap.',
         source: demo07Source,
+    },
+    {
+        slug: '08-sprite-playground',
+        title: '08 — sprite playground',
+        blurb: 'Pixel-perfect overlap + alpha outlines.',
+        source: demo08Source,
     },
     {
         slug: '09-falling-sand',

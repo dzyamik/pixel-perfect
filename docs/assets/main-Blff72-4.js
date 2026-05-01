@@ -1,4 +1,4 @@
-/**
+const n=`/**
  * Demo 02 — click to carve.
  *
  * Adds interactive pointer input on top of demo 01's procedural terrain.
@@ -12,7 +12,7 @@
  *  - Cursor shows a brush-radius outline circle.
  *  - Carving a hole instantly updates the bitmap; the affected chunk
  *    repaints on the next frame (visible as a one-frame texture swap).
- *  - The FPS overlay shows `repainted N` rising briefly when you carve,
+ *  - The FPS overlay shows \`repainted N\` rising briefly when you carve,
  *    then settling back to 0 — confirming repaints are demand-driven,
  *    not per-frame.
  */
@@ -90,9 +90,9 @@ class ClickToCarveScene extends Phaser.Scene {
         // @title Carve / deposit at the cursor
         // @desc Left-click carves a circle of air; right-click
         // @desc deposits a circle of material id 1 ("dirt"). Both
-        // @desc are scene-space coordinates — `pointer.worldX/Y`
+        // @desc are scene-space coordinates — \`pointer.worldX/Y\`
         // @desc accounts for camera transforms. Listen on
-        // @desc `pointerdown` for one-shot, `pointermove` (with a
+        // @desc \`pointerdown\` for one-shot, \`pointermove\` (with a
         // @desc button-down check) for continuous brushing.
         this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
             if (pointer.leftButtonDown()) {
@@ -123,8 +123,8 @@ class ClickToCarveScene extends Phaser.Scene {
         // @snippet wheel-resize-brush
         // @title Mouse wheel resizes the brush
         // @desc Standard pattern across all the demos. Phaser's
-        // @desc `wheel` event delivers `deltaY` (positive when
-        // @desc scrolling down). `Phaser.Math.Clamp` keeps the
+        // @desc \`wheel\` event delivers \`deltaY\` (positive when
+        // @desc scrolling down). \`Phaser.Math.Clamp\` keeps the
         // @desc value in a sensible range.
         this.input.on(
             'wheel',
@@ -155,11 +155,11 @@ class ClickToCarveScene extends Phaser.Scene {
 
     // @snippet count-chunk-repaints
     // @title Count how many chunks repainted this frame
-    // @desc `terrain.renderer.repaintDirty()` returns the number
+    // @desc \`terrain.renderer.repaintDirty()\` returns the number
     // @desc of chunks it uploaded a fresh texture for. Useful
     // @desc as a perf signal — if it's nonzero every frame
     // @desc with no input, something is dirtying chunks needlessly.
-    // @desc Replaces the convenience `terrain.update()` call
+    // @desc Replaces the convenience \`terrain.update()\` call
     // @desc which discards this number.
     override update(): void {
         this.lastRepainted = this.terrain.renderer.repaintDirty();
@@ -209,3 +209,4 @@ bootSandbox({
 });
 
 mountCodePanel(demoSource);
+`;export{n as d};

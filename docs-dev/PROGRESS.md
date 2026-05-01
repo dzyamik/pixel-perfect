@@ -274,12 +274,20 @@ list.
   snippets in source-grouped sections. Live search filters
   by slug, title, description, and code. New `recipes` link
   added to the demos landing footer.
-- **Demos annotated**: `03-physics`, `07-image-terrain`,
-  `09-falling-sand`. 10 snippets total covering Box2D
-  setup, terrain wiring, the update-order correctness
-  pattern, dynamic-body spawn, image-as-terrain stamping,
-  and four fluid-material kinds. The other demos can be
-  annotated incrementally.
+- **Demos annotated** (initial v2.6.0): `03-physics`,
+  `07-image-terrain`, `09-falling-sand`. 10 snippets total
+  covering Box2D setup, terrain wiring, the update-order
+  correctness pattern, dynamic-body spawn, image-as-terrain
+  stamping, and four fluid-material kinds.
+- **Extended (post-v2.7.3)**: `02-click-to-carve`,
+  `04-falling-debris`, `08-sprite-playground`. 9 more
+  snippets: carve/deposit on pointer, wheel brush resize,
+  chunk-repaint counting, debris callback wiring, per-frame
+  extraction, contour-as-Graphics rendering, AABB-pre-check
+  pattern, runtime sprite-texture swap, alpha-outline
+  visualization. **19 snippets across 6 demos** in the
+  recipes index. Demos 01, 05, 06 are still un-annotated;
+  pick them up when there's a high-value snippet to extract.
 
 ### Marker grammar
 

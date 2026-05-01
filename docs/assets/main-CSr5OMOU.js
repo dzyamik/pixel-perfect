@@ -1,14 +1,14 @@
-/**
+const e=`/**
  * Demo 08 — sprite playground.
  *
- * Drag-and-test sandbox for `PixelPerfectSprite`. Two pre-rendered
+ * Drag-and-test sandbox for \`PixelPerfectSprite\`. Two pre-rendered
  * pixel-art mini sprites by default (a dragger + a static target),
  * plus a small destructible terrain patch underneath. Drag the
  * left sprite onto the right sprite or onto the terrain; the demo
  * shows three things at all times:
  *
  *   - The dragged sprite's **alpha-mask outline** in cyan, traced
- *     via `AlphaOverlap.maskToContours(...)`. This is what the
+ *     via \`AlphaOverlap.maskToContours(...)\`. This is what the
  *     pixel-perfect collision actually sees, vs the bounding box
  *     that a naive Phaser overlap test would use.
  *   - Optional bounding-box outlines (AABBs) on both sprites + the
@@ -28,18 +28,18 @@
  *
  * Limits (inherited from PixelPerfectSprite v1):
  *
- *   - The sprite must be unscaled (we keep `scaleX === scaleY === 1`).
+ *   - The sprite must be unscaled (we keep \`scaleX === scaleY === 1\`).
  *     If you upload a giant image it'll show at native size; the
  *     overlap math will still be correct.
  *   - No rotation. The mask is sampled axis-aligned.
  *
  * Code-walkthrough notes:
  *
- *   - `this.pixelPerfect.sprite(x, y, key)` is the only entry point
+ *   - \`this.pixelPerfect.sprite(x, y, key)\` is the only entry point
  *     you need to make a sprite collision-aware.
- *   - `sprite.invalidateAlphaMask()` after mutating the texture
+ *   - \`sprite.invalidateAlphaMask()\` after mutating the texture
  *     forces a fresh extraction on the next overlap call.
- *   - `AlphaOverlap.maskToContours(mask, epsilon)` is the public
+ *   - \`AlphaOverlap.maskToContours(mask, epsilon)\` is the public
  *     primitive for visualizing a mask's outline.
  */
 
@@ -171,7 +171,7 @@ class SpritePlaygroundScene extends Phaser.Scene {
             const apply = () => {
                 const v = Number.parseFloat(scaleSlider.value);
                 this.dragSprite.setScale(v);
-                if (scaleReadout !== null) scaleReadout.textContent = `${v.toFixed(1)}×`;
+                if (scaleReadout !== null) scaleReadout.textContent = \`\${v.toFixed(1)}×\`;
             };
             scaleSlider.addEventListener('input', apply);
             apply();
@@ -190,7 +190,7 @@ class SpritePlaygroundScene extends Phaser.Scene {
             const apply = () => {
                 const deg = Number.parseFloat(rotSlider.value);
                 this.dragSprite.rotation = (deg * Math.PI) / 180;
-                if (rotReadout !== null) rotReadout.textContent = `${deg.toFixed(0)}°`;
+                if (rotReadout !== null) rotReadout.textContent = \`\${deg.toFixed(0)}°\`;
             };
             rotSlider.addEventListener('input', apply);
             apply();
@@ -258,8 +258,8 @@ class SpritePlaygroundScene extends Phaser.Scene {
 
     // @snippet swap-sprite-texture-runtime
     // @title Swap a PixelPerfectSprite's texture at runtime
-    // @desc After `setTexture(newKey)`, call
-    // @desc `invalidateAlphaMask()` so the next overlap call
+    // @desc After \`setTexture(newKey)\`, call
+    // @desc \`invalidateAlphaMask()\` so the next overlap call
     // @desc re-extracts the alpha mask from the new texture.
     // @desc Without the invalidate, collisions would still use
     // @desc the OLD texture's mask. This is the entire glue
@@ -303,7 +303,7 @@ class SpritePlaygroundScene extends Phaser.Scene {
         const ctx = canvas.getContext('2d');
         if (ctx === null) return;
         // Body: rounded rectangle.
-        ctx.fillStyle = `#${body.toString(16).padStart(6, '0')}`;
+        ctx.fillStyle = \`#\${body.toString(16).padStart(6, '0')}\`;
         ctx.beginPath();
         ctx.roundRect(8, 8, 16, 18, 4);
         ctx.fill();
@@ -314,7 +314,7 @@ class SpritePlaygroundScene extends Phaser.Scene {
         // Antennae.
         ctx.fillRect(11, 1, 2, 5);
         ctx.fillRect(19, 1, 2, 5);
-        ctx.fillStyle = `#${accent.toString(16).padStart(6, '0')}`;
+        ctx.fillStyle = \`#\${accent.toString(16).padStart(6, '0')}\`;
         ctx.fillRect(10, 0, 4, 2);
         ctx.fillRect(18, 0, 4, 2);
         // Eyes.
@@ -325,7 +325,7 @@ class SpritePlaygroundScene extends Phaser.Scene {
         ctx.fillRect(13, 13, 1, 1);
         ctx.fillRect(18, 13, 1, 1);
         // Two little legs on the bottom.
-        ctx.fillStyle = `#${body.toString(16).padStart(6, '0')}`;
+        ctx.fillStyle = \`#\${body.toString(16).padStart(6, '0')}\`;
         ctx.fillRect(10, 26, 3, 5);
         ctx.fillRect(19, 26, 3, 5);
 
@@ -373,13 +373,13 @@ class SpritePlaygroundScene extends Phaser.Scene {
 
     // @snippet trace-alpha-outline
     // @title Visualize the actual alpha mask
-    // @desc `AlphaOverlap.maskToContours(mask, epsilon)` is the
+    // @desc \`AlphaOverlap.maskToContours(mask, epsilon)\` is the
     // @desc public primitive for "what shape does collision
     // @desc actually use?" — useful for debugging alpha-aware
     // @desc tests and for in-game art tools. Project each
     // @desc mask-local point through the sprite's rotation +
     // @desc origin to draw it in scene coords; the outline then
-    // @desc tracks `setScale` and `setRotation` automatically.
+    // @desc tracks \`setScale\` and \`setRotation\` automatically.
     private drawAlphaOutline(sprite: PixelPerfectSprite, color: number): void {
         const mask = sprite.getEffectiveAlphaMask();
         const contours = AlphaOverlap.maskToContours(mask, 0.5);
@@ -420,3 +420,4 @@ bootSandbox({
 });
 
 mountCodePanel(demoSource);
+`;export{e as d};
