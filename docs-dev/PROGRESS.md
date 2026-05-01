@@ -41,6 +41,7 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v3.0.2 — multi-cell lateral reach (5× gravity flatten speed) | ✅ done | `v3.0.2` |
 | v3.0.3 — perf: fast-path mass access + skip fluid collider rebuilds | ✅ done | `v3.0.3` |
 | v3.0.4 — demo 09 per-frame profiling + adaptive LATERAL_REACH | ✅ done | `v3.0.4` |
+| v3.1 — pool-based fluid simulation | ⬜ in progress (`docs-dev/07-v3.1-pool-based-fluid.md`) | — |
 
 Test suite: 359 tests across 21 files. typecheck and lint clean.
 

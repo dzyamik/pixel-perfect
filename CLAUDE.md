@@ -17,7 +17,8 @@ Roadmap: `docs-dev/02-roadmap.md`.
 Tooling: `docs-dev/03-tooling.md`.
 Sim parameter ranges + edge cases: `docs-dev/04-tuning-research.md`.
 Sim design rationale (why it's shaped this way): `docs-dev/05-simulation.md`.
-v3.0 mass-based fluid plan (not yet implemented): `docs-dev/06-v3-mass-based-fluid.md`.
+v3.0 mass-based fluid plan (shipped as v3.0.0): `docs-dev/06-v3-mass-based-fluid.md`.
+v3.1 pool-based fluid plan (in progress): `docs-dev/07-v3.1-pool-based-fluid.md`.
 **Running progress + open issues: `docs-dev/PROGRESS.md`** — read this at session start to catch up on what's in flight.
 
 ## Hard rules
