@@ -25,10 +25,10 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v2.3 — more fluid kinds (gas / oil / fire) + multi-cell flow | ✅ done | `v2.3.0` |
 | v2.4 — active-cell tracking (perf) | ✅ done | `v2.4.0` |
 | ~~v2.5 — VitePress concept-and-recipes site + tutorial~~ | retired (existing docs cover the gap; replaced by v2.5/v2.6 below) | — |
-| v2.5 — sim tuning research + simulation concepts doc | ⬜ planned | — |
-| v2.6 — in-demo code-snippet tutorials (per-demo + recipes index) | ⬜ planned | — |
+| v2.5 — sim tuning research + simulation concepts doc | ✅ done | — |
+| v2.6 — in-demo code-snippet tutorials (per-demo + recipes index) | ⬜ in progress | — |
 
-Test suite: 307 tests across 20 files, ~1.5 s. typecheck and lint clean.
+Test suite: 315 tests across 20 files. typecheck and lint clean.
 
 ---
 

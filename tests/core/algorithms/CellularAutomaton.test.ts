@@ -1130,3 +1130,145 @@ describe('CellularAutomaton.step — multi-cell water flow', () => {
         expect(floorWaterCount).toBe(6);
     });
 });
+
+// ──────────────────────────────────────────────────────────────────────
+// v2.5 — invariants surfaced by the tuning-research probe (see
+// docs-dev/04-tuning-research.md). Keepers from the probe move
+// here; gotchas (e.g. burnDuration > 256 → infinite burn) are
+// documented in the research file, not pinned as test invariants
+// (we may fix them later).
+// ──────────────────────────────────────────────────────────────────────
+
+describe('CellularAutomaton.step — boundary timers', () => {
+    it('burnDuration=0 and burnDuration=1 both kill fire on its first step', () => {
+        function dieAt(burnDuration: number): number {
+            const fireMat: Material = {
+                ...fire, burnDuration,
+            };
+            const bm = new ChunkedBitmap({
+                width: 1, height: 1, chunkSize: 1,
+                materials: [fireMat],
+            });
+            bm.setPixel(0, 0, fireMat.id);
+            for (let t = 0; t < 5; t++) {
+                CellularAutomaton.step(bm, t);
+                if (bm.getPixel(0, 0) === 0) return t;
+            }
+            return -1;
+        }
+        expect(dieAt(0)).toBe(0);
+        expect(dieAt(1)).toBe(0);
+    });
+
+    it('settleAfterTicks=0 promotes on first stationary tick', () => {
+        const SETTLED = 4;
+        const settledSand: Material = {
+            id: SETTLED, name: 'settled', color: 0xa08050,
+            density: 1, friction: 0.7, restitution: 0.05,
+            destructible: true, destructionResistance: 0,
+            simulation: 'static',
+        };
+        const settlingSand: Material = {
+            ...sand,
+            settlesTo: SETTLED,
+            settleAfterTicks: 0,
+        };
+        const bm = new ChunkedBitmap({
+            width: 1, height: 2, chunkSize: 1,
+            materials: [settlingSand, stone, settledSand],
+        });
+        bm.setPixel(0, 0, settlingSand.id);
+        bm.setPixel(0, 1, stone.id);
+        CellularAutomaton.step(bm, 0);
+        expect(bm.getPixel(0, 0)).toBe(SETTLED);
+    });
+});
+
+describe('CellularAutomaton.step — same-rank fluids do not swap', () => {
+    it('water column on water rests stable on stone', () => {
+        const bm = new ChunkedBitmap({
+            width: 1, height: 3, chunkSize: 1,
+            materials: [water, stone],
+        });
+        bm.setPixel(0, 0, water.id);
+        bm.setPixel(0, 1, water.id);
+        bm.setPixel(0, 2, stone.id);
+        for (let t = 0; t < 5; t++) CellularAutomaton.step(bm, t);
+        expect(bm.getPixel(0, 0)).toBe(water.id);
+        expect(bm.getPixel(0, 1)).toBe(water.id);
+    });
+
+    it('oil on oil — neither moves', () => {
+        const bm = new ChunkedBitmap({
+            width: 1, height: 3, chunkSize: 1,
+            materials: [oil, stone],
+        });
+        bm.setPixel(0, 0, oil.id);
+        bm.setPixel(0, 1, oil.id);
+        bm.setPixel(0, 2, stone.id);
+        for (let t = 0; t < 5; t++) CellularAutomaton.step(bm, t);
+        expect(bm.getPixel(0, 0)).toBe(oil.id);
+        expect(bm.getPixel(0, 1)).toBe(oil.id);
+    });
+});
+
+describe('CellularAutomaton.step — fire is displaceable by density swap', () => {
+    // Fire's `simulation` is `'fire'`, not `'static'`. Density swaps
+    // from neighboring fluids treat fire as a normal rank-2 cell and
+    // can move it. Documented behavior — not a "water extinguishes
+    // fire" interaction. See docs-dev/04-tuning-research.md.
+    it('gas below fire — gas rises, fire pushed down', () => {
+        const bm = gridBitmapV23([
+            'f',
+            'g',
+        ]);
+        CellularAutomaton.step(bm, 0);
+        expect(bm.getPixel(0, 0)).toBe(gas.id);
+        expect(bm.getPixel(0, 1)).toBe(fire.id);
+    });
+
+    it('water above fire — water sinks, fire pushed up (no extinguish)', () => {
+        const bm = gridBitmapV23([
+            'w',
+            'f',
+        ]);
+        CellularAutomaton.step(bm, 0);
+        expect(bm.getPixel(0, 0)).toBe(fire.id);
+        expect(bm.getPixel(0, 1)).toBe(water.id);
+    });
+
+    it('sand above fire — sand sinks, fire pushed up', () => {
+        const bm = gridBitmapV23([
+            's',
+            'f',
+        ]);
+        CellularAutomaton.step(bm, 0);
+        expect(bm.getPixel(0, 0)).toBe(fire.id);
+        expect(bm.getPixel(0, 1)).toBe(sand.id);
+    });
+});
+
+describe('CellularAutomaton.step — mixed-rank stack equilibrium', () => {
+    it('5-fluid stack on stone resolves to density-sorted top-down', () => {
+        // Initial: . / g / o / w / s / # (ill-sorted)
+        const bm = new ChunkedBitmap({
+            width: 1, height: 6, chunkSize: 1,
+            materials: [sand, stone, water, oil, gas],
+        });
+        bm.setPixel(0, 1, gas.id);
+        bm.setPixel(0, 2, oil.id);
+        bm.setPixel(0, 3, water.id);
+        bm.setPixel(0, 4, sand.id);
+        bm.setPixel(0, 5, stone.id);
+
+        for (let t = 0; t < 30; t++) CellularAutomaton.step(bm, t);
+
+        // Steady state: gas(0), air(1), oil(2), water(3), sand(4), stone(5).
+        expect(bm.getPixel(0, 0)).toBe(gas.id);
+        expect(bm.getPixel(0, 1)).toBe(0);
+        expect(bm.getPixel(0, 2)).toBe(oil.id);
+        expect(bm.getPixel(0, 3)).toBe(water.id);
+        expect(bm.getPixel(0, 4)).toBe(sand.id);
+        expect(bm.getPixel(0, 5)).toBe(stone.id);
+    });
+});

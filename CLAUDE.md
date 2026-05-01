@@ -15,6 +15,8 @@ Three layers, depends downward only:
 Detailed architecture: `docs-dev/01-architecture.md`.
 Roadmap: `docs-dev/02-roadmap.md`.
 Tooling: `docs-dev/03-tooling.md`.
+Sim parameter ranges + edge cases: `docs-dev/04-tuning-research.md`.
+Sim design rationale (why it's shaped this way): `docs-dev/05-simulation.md`.
 **Running progress + open issues: `docs-dev/PROGRESS.md`** — read this at session start to catch up on what's in flight.
 
 ## Hard rules
