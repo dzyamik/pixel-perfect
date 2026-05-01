@@ -1109,6 +1109,71 @@ describe('CellularAutomaton.step — active-cell tracking', () => {
     });
 });
 
+describe('CellularAutomaton.step — multi-cell lateral spread (v3.0.2)', () => {
+    // v3.0.2 introduced multi-cell lateral reach so flattening
+    // propagates ~5 cells per tick — roughly 5× the gravity rate.
+    // Each step in the lateral chain uses fresh state, so mass
+    // cascades outward in a single tick.
+
+    it('a single water cell spreads ~5 cells per tick laterally', () => {
+        // Sealed 1-tall channel — only horizontal motion possible.
+        const W = 21;
+        const H = 3;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [water, stone],
+        });
+        for (let x = 0; x < W; x++) {
+            bm.setPixel(x, 0, stone.id);
+            bm.setPixel(x, 2, stone.id);
+        }
+        bm.setPixel(W >> 1, 1, water.id);
+        CellularAutomaton.step(bm, 0);
+        let leftmost = W;
+        let rightmost = -1;
+        for (let x = 0; x < W; x++) {
+            if (bm.getPixel(x, 1) === water.id) {
+                if (x < leftmost) leftmost = x;
+                if (x > rightmost) rightmost = x;
+            }
+        }
+        const center = W >> 1;
+        // After 1 tick, mass should have reached at least 4 cells
+        // on each side of the source (5 in the standard config;
+        // assertion is "at least 4" to allow for tuning).
+        expect(center - leftmost).toBeGreaterThanOrEqual(4);
+        expect(rightmost - center).toBeGreaterThanOrEqual(4);
+    });
+
+    it('a 6-tall column drains AND flattens within 30 ticks', () => {
+        const W = 13;
+        const H = 8;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [water, stone],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        for (let y = 0; y < 6; y++) bm.setPixel(W >> 1, y, water.id);
+        for (let t = 0; t < 30; t++) CellularAutomaton.step(bm, t);
+        // No water above the floor row.
+        for (let y = 0; y < H - 2; y++) {
+            for (let x = 0; x < W; x++) {
+                expect(bm.getPixel(x, y)).toBe(0);
+            }
+        }
+        // Floor cells near-uniform.
+        const masses: number[] = [];
+        for (let x = 0; x < W; x++) {
+            if (bm.getPixel(x, H - 2) === water.id) {
+                masses.push(bm.getMass(x, H - 2));
+            }
+        }
+        const max = Math.max(...masses);
+        const min = Math.min(...masses);
+        expect(max - min).toBeLessThan(0.05);
+    });
+});
+
 describe('CellularAutomaton.step — surface flatness + no orphans (v3.0.1)', () => {
     // v3.0.1 dropped MIN_FLOW from 0.005 to MIN_MASS (0.0001) so
     // cells fully equalize instead of freezing once differences

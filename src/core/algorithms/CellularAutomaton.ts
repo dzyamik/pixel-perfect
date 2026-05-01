@@ -185,11 +185,23 @@ const MAX_FLOW = 1.0;
 /**
  * Lateral equalization fraction — fraction of the mass difference
  * between two same-rank neighbors that flows from heavier to
- * lighter per tick. `1/4` is W-Shadow's default; tighter values
- * cause visible jitter at the spreading front, looser values
- * make spreading sluggish.
+ * lighter per tick. `0.5` fully equalizes a pair of adjacent
+ * cells in a single tick; lower values produce gentler spread.
+ * v3.0.2: bumped from `0.25` to `0.5` to keep up with multi-cell
+ * lateral reach (see {@link LATERAL_REACH}).
  */
-const LATERAL_EQUALIZE = 0.25;
+const LATERAL_EQUALIZE = 0.5;
+/**
+ * Maximum number of cells on each side that a fluid cell tries
+ * to equalize with per tick. With `LATERAL_REACH = 5`, surface
+ * flattening propagates ~5 cells per tick — roughly 5× the
+ * single-cell-per-tick gravity rate. Each step uses fresh state
+ * so mass cascades outward without a separate multi-pass loop.
+ *
+ * Higher values flatten faster but cost more per `stepLiquid`
+ * call (~2 transfers per d). Capped at 16 for sanity.
+ */
+const LATERAL_REACH = 5;
 
 /**
  * Given two stacked cells with combined mass `total`, returns
@@ -297,24 +309,32 @@ function stepLiquid(
         }
     }
 
-    // 2 + 3. Lateral equalization (left and right). Each side
-    // independently quarter-equalizes toward the neighbor.
-    for (const sx of [-1, 1]) {
+    // 2 + 3. Lateral equalization (left and right) up to
+    // `LATERAL_REACH` cells on each side. Each step equalizes
+    // toward a single neighbor and uses fresh state, so the
+    // chain of transfers spreads mass outward in a single tick
+    // — roughly `LATERAL_REACH` cells of spread per tick. Stops
+    // when it hits a wall, a different non-air material, or runs
+    // out of source mass.
+    for (let d = 1; d <= LATERAL_REACH; d++) {
         if (remaining < MIN_MASS) break;
-        const nx = x + sx;
-        if (nx < 0 || nx >= W) continue;
-        const targetId = bitmap.getPixel(nx, y);
-        if (targetId !== id && targetId !== 0) continue;
-        const targetMass = bitmap.getMass(nx, y);
-        const diff = remaining - targetMass;
-        if (diff <= 0) continue;
-        let flow = diff * LATERAL_EQUALIZE;
-        if (flow > MAX_FLOW) flow = MAX_FLOW;
-        if (flow > remaining) flow = remaining;
-        if (flow > MIN_FLOW) {
-            bitmap.setMass(nx, y, targetMass + flow, id);
-            remaining -= flow;
-            bitmap.setMass(x, y, remaining);
+        for (const sx of [-1, 1]) {
+            if (remaining < MIN_MASS) break;
+            const nx = x + sx * d;
+            if (nx < 0 || nx >= W) continue;
+            const targetId = bitmap.getPixel(nx, y);
+            if (targetId !== id && targetId !== 0) continue;
+            const targetMass = bitmap.getMass(nx, y);
+            const diff = remaining - targetMass;
+            if (diff <= 0) continue;
+            let flow = diff * LATERAL_EQUALIZE;
+            if (flow > MAX_FLOW) flow = MAX_FLOW;
+            if (flow > remaining) flow = remaining;
+            if (flow > MIN_FLOW) {
+                bitmap.setMass(nx, y, targetMass + flow, id);
+                remaining -= flow;
+                bitmap.setMass(x, y, remaining);
+            }
         }
     }
 

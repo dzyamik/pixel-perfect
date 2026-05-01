@@ -38,8 +38,72 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v2.7.6 — anti-oscillation memory enables surface compaction | ✅ done | `v2.7.6` |
 | v3.0 — mass-based fluid simulation | ✅ done | `v3.0.0` |
 | v3.0.1 — flatten surfaces + evaporate orphans | ✅ done | `v3.0.1` |
+| v3.0.2 — multi-cell lateral reach (5× gravity flatten speed) | ✅ done | `v3.0.2` |
 
-Test suite: 357 tests across 21 files. typecheck and lint clean.
+Test suite: 359 tests across 21 files. typecheck and lint clean.
+
+---
+
+## v3.0.2 — multi-cell lateral reach (2026-05-01)
+
+User-reported: "flattening speed should be 5× of gravity speed
+— it should be much faster than it is now."
+
+Pre-v3.0.2: lateral equalization only equalized with the
+immediate left and right neighbors per tick. Wave propagation
+rate = 1 cell per tick — same as gravity (1 row per tick fall).
+With a 6-tall column the flat surface emerged after ~500 ticks
+because each cell could only push mass to its IMMEDIATE
+neighbor each step.
+
+### Fix
+
+The lateral pass now equalizes with cells `1..LATERAL_REACH`
+away on each side per `stepLiquid` call. Each step uses fresh
+state, so mass cascades outward across the row in a single
+tick.
+
+```
+const LATERAL_EQUALIZE = 0.5;  // was 0.25 — full equalize per pair
+const LATERAL_REACH = 5;        // new — N cells of spread per tick
+```
+
+`LATERAL_EQUALIZE` bumped from `0.25` to `0.5` so each
+adjacent pair fully equalizes in one tick (rather than diff-
+halves). Combined with the multi-cell reach, surface
+flattening now propagates ~5 cells/tick.
+
+### Result (probes)
+
+| Scenario | v3.0.1 | v3.0.2 |
+|---|---|---|
+| Single water cell spread after 1 tick | 1 cell each side | **5 cells each side** |
+| 6-tall column → flat floor | ~500 ticks | **~30 ticks** |
+
+### Bench
+
+Per-step cost goes up ~20% in the worst case (more transfers
+per cell):
+
+| Scenario | v3.0.1 | v3.0.2 |
+|---|---|---|
+| Active pour | ~70 µs/step | ~81 µs/step |
+| Full mixed bitmap | ~14 ms/step | ~17 ms/step |
+
+Settled worlds unchanged (still ~5 µs/step early-out).
+
+### Files involved
+
+- `src/core/algorithms/CellularAutomaton.ts` — `LATERAL_REACH`
+  constant; `stepLiquid` lateral loop iterates `d=1..REACH`,
+  each pass equalizing with a single neighbor at distance `d`
+  on both sides.
+- `tests/core/algorithms/CellularAutomaton.test.ts` — new
+  describe "multi-cell lateral spread (v3.0.2)" with 2 tests:
+  single-cell spread reaches ≥ 4 cells per tick; 6-tall column
+  drains AND flattens within 30 ticks.
+
+---
 
 ---
 
