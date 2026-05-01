@@ -63,6 +63,21 @@ export class ChunkedBitmap {
     private _cellTimers: Uint8Array | null = null;
 
     /**
+     * Sparse set of cells that the cellular-automaton step should
+     * visit on its next call (encoded as `y * width + x`).
+     *
+     * Lazy-allocated when {@link enableActiveCellTracking} or the
+     * {@link activeCells} getter is first invoked. Once initialized,
+     * every {@link setPixel} mutation auto-adds the changed cell and
+     * its 8 neighbors so external carve / deposit / paint ops AND
+     * the sim's own swap-mutations keep activation propagating
+     * organically. Cells that didn't move and have no ongoing state
+     * (timers, fire) drop out next tick and don't return until a
+     * neighbor's mutation re-activates them.
+     */
+    private _activeCells: Set<number> | null = null;
+
+    /**
      * @throws If width/height/chunkSize are not positive integers, or if
      *         chunkSize does not divide width and height evenly.
      */
@@ -186,6 +201,35 @@ export class ChunkedBitmap {
         if (this._cellTimers !== null) {
             this._cellTimers[y * this.width + x] = 0;
         }
+        // Once active-cell tracking is on, propagate activation to
+        // the changed cell + its 8-neighborhood so the sim picks up
+        // anything that might want to fall, flow, ignite, or settle
+        // because of this change. No-op until the sim has called
+        // `enableActiveCellTracking`, so non-fluid users pay nothing.
+        if (this._activeCells !== null) {
+            this._touchActiveNeighborhood(x, y);
+        }
+    }
+
+    /**
+     * Adds the 3×3 Moore neighborhood of `(x, y)` to the active-cell
+     * set, clipping at world bounds. Caller guarantees
+     * `this._activeCells !== null`.
+     */
+    private _touchActiveNeighborhood(x: number, y: number): void {
+        const set = this._activeCells!;
+        const W = this.width;
+        const H = this.height;
+        const xMin = x > 0 ? x - 1 : 0;
+        const xMax = x < W - 1 ? x + 1 : W - 1;
+        const yMin = y > 0 ? y - 1 : 0;
+        const yMax = y < H - 1 ? y + 1 : H - 1;
+        for (let yy = yMin; yy <= yMax; yy++) {
+            const rowBase = yy * W;
+            for (let xx = xMin; xx <= xMax; xx++) {
+                set.add(rowBase + xx);
+            }
+        }
     }
 
     /**
@@ -207,6 +251,78 @@ export class ChunkedBitmap {
             this._cellTimers = new Uint8Array(this.width * this.height);
         }
         return this._cellTimers;
+    }
+
+    /**
+     * Sparse set of cell indices (`y * width + x`) the cellular-
+     * automaton step should visit on its next call.
+     *
+     * Lazy-allocated on first access. Once it exists, every
+     * {@link setPixel} mutation auto-marks the changed cell and its
+     * 8 neighbors. The sim consumes this set at the start of each
+     * `step` (snapshot + clear), then the same set fills back up
+     * during processing via `setPixel` calls and explicit
+     * {@link markActive} calls for cells with ongoing state (fire
+     * timers, settling sand counters).
+     */
+    get activeCells(): Set<number> {
+        if (this._activeCells === null) {
+            this._activeCells = new Set<number>();
+        }
+        return this._activeCells;
+    }
+
+    /**
+     * Whether active-cell tracking has been initialized on this
+     * bitmap. Used by sim helpers that want to peek without lazy-
+     * initializing the set.
+     */
+    get hasActiveCellTracking(): boolean {
+        return this._activeCells !== null;
+    }
+
+    /**
+     * Idempotent. Initializes the active-cell set and seeds it with
+     * every non-air, non-static cell currently in the bitmap so the
+     * sim can pick up cells that were placed before tracking turned
+     * on. The first `CellularAutomaton.step` call invokes this; you
+     * can also call it eagerly if you need the auto-mark side-effect
+     * on `setPixel` before the first step runs.
+     */
+    enableActiveCellTracking(): void {
+        if (this._activeCells !== null) return;
+        const set = new Set<number>();
+        this._activeCells = set;
+        const W = this.width;
+        const H = this.height;
+        for (let y = 0; y < H; y++) {
+            for (let x = 0; x < W; x++) {
+                const id = this.getPixel(x, y);
+                if (id === 0) continue;
+                const m = this.materials.get(id);
+                if (m === undefined) continue;
+                const sim = m.simulation;
+                if (sim === undefined || sim === 'static') continue;
+                set.add(y * W + x);
+            }
+        }
+    }
+
+    /**
+     * Adds `(x, y)` to the active-cell set so the next `step` will
+     * visit it. Used by the cellular automaton to keep cells with
+     * ongoing state (fire timer ticking, sand rest counter
+     * incrementing) in the rotation when `setPixel` wasn't called.
+     *
+     * No-op when active-cell tracking hasn't been initialized
+     * (callers in the sim run after `enableActiveCellTracking` so
+     * the guard is conservative). Out-of-bounds coordinates are
+     * silently ignored.
+     */
+    markActive(x: number, y: number): void {
+        if (this._activeCells === null) return;
+        if (x < 0 || x >= this.width || y < 0 || y >= this.height) return;
+        this._activeCells.add(y * this.width + x);
     }
 
     /**

@@ -272,3 +272,120 @@ describe('ChunkedBitmap coordinate conversion', () => {
         expect(() => bitmap.getChunk(0, 2)).toThrow();
     });
 });
+
+describe('ChunkedBitmap active-cell tracking', () => {
+    const sand: Material = {
+        id: 3,
+        name: 'sand',
+        color: 0xd4b06a,
+        density: 1,
+        friction: 0.5,
+        restitution: 0.05,
+        destructible: true,
+        destructionResistance: 0,
+        simulation: 'sand',
+    };
+
+    it('hasActiveCellTracking is false until enabled or accessed', () => {
+        const bm = new ChunkedBitmap({ width: 4, height: 4, chunkSize: 2 });
+        expect(bm.hasActiveCellTracking).toBe(false);
+    });
+
+    it('setPixel does not auto-mark before tracking is enabled', () => {
+        const bm = new ChunkedBitmap({
+            width: 4, height: 4, chunkSize: 2, materials: [sand],
+        });
+        bm.setPixel(1, 1, sand.id);
+        // No tracking initialized → no neighbor activation, no set
+        // allocation. Confirms the zero-overhead path for non-fluid
+        // users.
+        expect(bm.hasActiveCellTracking).toBe(false);
+    });
+
+    it('enableActiveCellTracking seeds with non-air, non-static cells', () => {
+        const bm = new ChunkedBitmap({
+            width: 4, height: 4, chunkSize: 2, materials: [sand, dirt],
+        });
+        bm.setPixel(0, 0, sand.id); // mobile
+        bm.setPixel(1, 0, dirt.id); // static (no simulation kind)
+        bm.setPixel(2, 2, sand.id); // mobile
+        bm.enableActiveCellTracking();
+        expect(bm.activeCells.has(0 * 4 + 0)).toBe(true);
+        expect(bm.activeCells.has(2 * 4 + 2)).toBe(true);
+        expect(bm.activeCells.has(0 * 4 + 1)).toBe(false); // dirt is static
+        expect(bm.activeCells.size).toBe(2);
+    });
+
+    it('enableActiveCellTracking is idempotent', () => {
+        const bm = new ChunkedBitmap({
+            width: 4, height: 4, chunkSize: 2, materials: [sand],
+        });
+        bm.setPixel(0, 0, sand.id);
+        bm.enableActiveCellTracking();
+        const set1 = bm.activeCells;
+        bm.enableActiveCellTracking();
+        const set2 = bm.activeCells;
+        // Same instance — second call didn't reseed.
+        expect(set1).toBe(set2);
+    });
+
+    it('setPixel auto-marks the changed cell + 8 neighbors once tracking is on', () => {
+        const bm = new ChunkedBitmap({
+            width: 5, height: 5, chunkSize: 5, materials: [sand],
+        });
+        bm.enableActiveCellTracking();
+        bm.activeCells.clear();
+        bm.setPixel(2, 2, sand.id);
+        // Center + Moore neighborhood = 9 indices.
+        const expected = [
+            1 * 5 + 1, 1 * 5 + 2, 1 * 5 + 3,
+            2 * 5 + 1, 2 * 5 + 2, 2 * 5 + 3,
+            3 * 5 + 1, 3 * 5 + 2, 3 * 5 + 3,
+        ];
+        for (const idx of expected) expect(bm.activeCells.has(idx)).toBe(true);
+        expect(bm.activeCells.size).toBe(9);
+    });
+
+    it('setPixel auto-mark clips at world bounds (corner cell)', () => {
+        const bm = new ChunkedBitmap({
+            width: 4, height: 4, chunkSize: 2, materials: [sand],
+        });
+        bm.enableActiveCellTracking();
+        bm.activeCells.clear();
+        bm.setPixel(0, 0, sand.id);
+        // Corner — only (0,0), (1,0), (0,1), (1,1) should be marked.
+        expect(bm.activeCells.size).toBe(4);
+        expect(bm.activeCells.has(0)).toBe(true);
+        expect(bm.activeCells.has(1)).toBe(true);
+        expect(bm.activeCells.has(4)).toBe(true);
+        expect(bm.activeCells.has(5)).toBe(true);
+    });
+
+    it('markActive ignores out-of-bounds coordinates and uninitialized state', () => {
+        const bm = new ChunkedBitmap({ width: 4, height: 4, chunkSize: 2 });
+        // No-op when tracking isn't initialized.
+        bm.markActive(1, 1);
+        expect(bm.hasActiveCellTracking).toBe(false);
+        bm.enableActiveCellTracking();
+        bm.activeCells.clear();
+        bm.markActive(-1, 0);
+        bm.markActive(4, 0);
+        bm.markActive(0, -1);
+        bm.markActive(0, 4);
+        expect(bm.activeCells.size).toBe(0);
+        bm.markActive(2, 2);
+        expect(bm.activeCells.size).toBe(1);
+    });
+
+    it('setPixel that doesn\'t change the cell does not mark', () => {
+        const bm = new ChunkedBitmap({
+            width: 4, height: 4, chunkSize: 2, materials: [sand],
+        });
+        bm.enableActiveCellTracking();
+        bm.setPixel(1, 1, sand.id);
+        bm.activeCells.clear();
+        // Same id again — early-out, no auto-mark.
+        bm.setPixel(1, 1, sand.id);
+        expect(bm.activeCells.size).toBe(0);
+    });
+});

@@ -932,6 +932,175 @@ describe('CellularAutomaton.step — fire', () => {
     });
 });
 
+// ──────────────────────────────────────────────────────────────────────
+// v2.4 — sparse active-cell tracking
+// ──────────────────────────────────────────────────────────────────────
+
+describe('CellularAutomaton.step — active-cell tracking', () => {
+    it('first step seeds the active set from existing mobile cells', () => {
+        const bm = gridBitmap([
+            's....',
+            '.....',
+            '#####',
+        ]);
+        // Bitmap built before any step ran. setPixel didn't auto-mark
+        // because tracking wasn't initialized yet. The first step
+        // must scan and seed the set itself.
+        expect(bm.hasActiveCellTracking).toBe(false);
+        CellularAutomaton.step(bm, 0);
+        // Sand fell from (0,0) to (0,1).
+        expect(bm.getPixel(0, 1)).toBe(sand.id);
+        expect(bm.hasActiveCellTracking).toBe(true);
+    });
+
+    it('a settled world drops the active set to empty', () => {
+        // Sand on stone with no air around it — nothing moves, nothing
+        // settles (vanilla sand has no settlesTo). After one tick the
+        // active set should be empty.
+        const bm = gridBitmap([
+            's',
+            '#',
+        ]);
+        CellularAutomaton.step(bm, 0);
+        expect(bm.activeCells.size).toBe(0);
+        // Subsequent steps are no-ops — bitmap unchanged.
+        CellularAutomaton.step(bm, 1);
+        CellularAutomaton.step(bm, 2);
+        expect(renderGrid(bm)).toEqual(['s', '#']);
+        expect(bm.activeCells.size).toBe(0);
+    });
+
+    it('settling sand keeps itself active until it promotes', () => {
+        // Sand resting on stone with settling configured. Each tick
+        // the rest-timer ticks; the cell must stay in the active set
+        // so the next call processes it again.
+        const SETTLED = 4;
+        const settledSand: Material = {
+            id: SETTLED,
+            name: 'settled-sand',
+            color: 0xa08050,
+            density: 1,
+            friction: 0.7,
+            restitution: 0.05,
+            destructible: true,
+            destructionResistance: 0,
+            simulation: 'static',
+        };
+        const settlingSand: Material = {
+            ...sand,
+            settlesTo: SETTLED,
+            settleAfterTicks: 3,
+        };
+        const bm = new ChunkedBitmap({
+            width: 1, height: 2, chunkSize: 1,
+            materials: [settlingSand, stone, settledSand],
+        });
+        bm.setPixel(0, 0, settlingSand.id);
+        bm.setPixel(0, 1, stone.id);
+
+        CellularAutomaton.step(bm, 0);
+        expect(bm.activeCells.has(0)).toBe(true); // still ticking
+        CellularAutomaton.step(bm, 1);
+        expect(bm.activeCells.has(0)).toBe(true);
+        CellularAutomaton.step(bm, 2);
+        // Promoted to SETTLED (static); active set drops it next tick.
+        expect(bm.getPixel(0, 0)).toBe(SETTLED);
+        CellularAutomaton.step(bm, 3);
+        expect(bm.activeCells.size).toBe(0);
+    });
+
+    it('a stuck non-settling fluid drops from the active set', () => {
+        // Water surrounded by stone has nowhere to go and no settling
+        // config. After one tick it should be removed from the
+        // active set.
+        const bm = gridBitmap([
+            '###',
+            '#w#',
+            '###',
+        ]);
+        CellularAutomaton.step(bm, 0);
+        expect(bm.activeCells.size).toBe(0);
+        // Bitmap unchanged.
+        expect(renderGrid(bm)).toEqual(['###', '#w#', '###']);
+    });
+
+    it('external setPixel reactivates a previously-stuck cell', () => {
+        // Water blocked on a stone shelf. Active set drops it.
+        // Then we carve a hole in the shelf via setPixel — the
+        // sand-falling-into-newly-air cell must be processed next
+        // tick.
+        const bm = gridBitmap([
+            'w',
+            '#',
+            '.',
+        ]);
+        CellularAutomaton.step(bm, 0);
+        expect(bm.activeCells.size).toBe(0);
+        // Carve the stone away.
+        bm.setPixel(0, 1, 0);
+        // Auto-marked the carved cell + its in-bounds neighbors,
+        // including the water cell at (0, 0).
+        expect(bm.activeCells.has(0)).toBe(true);
+        CellularAutomaton.step(bm, 1);
+        // Water fell into the hole.
+        expect(bm.getPixel(0, 1)).toBe(water.id);
+    });
+
+    it('fire keeps itself active every tick until burnDuration elapses', () => {
+        // Lone fire cell with nothing flammable nearby. It must
+        // re-mark itself active each tick so its burn timer
+        // advances; otherwise the cell would stop processing after
+        // a single tick and never die.
+        const bm = gridBitmapV23(['f']);
+        CellularAutomaton.step(bm, 0);
+        expect(bm.activeCells.has(0)).toBe(true); // still alive
+        // Run through to burnout. burnDuration in tests is 20.
+        runTicks(bm, 19);
+        expect(bm.getPixel(0, 0)).toBe(0); // air
+    });
+
+    it('step on an empty bitmap is a no-op (no allocation explosions)', () => {
+        // Pure air → seed scan finds nothing → step returns early.
+        const bm = new ChunkedBitmap({
+            width: 4, height: 4, chunkSize: 2,
+            materials: [sand, water, stone],
+        });
+        for (let t = 0; t < 100; t++) CellularAutomaton.step(bm, t);
+        expect(bm.activeCells.size).toBe(0);
+    });
+
+    it('settled-sand bitmap stays settled across many empty-step ticks', () => {
+        // Sand promoted to a static "settled-sand" then continues
+        // running step many times. The static cell must NOT re-enter
+        // the active set, and the bitmap must remain stable.
+        const SETTLED = 4;
+        const settledSand: Material = {
+            id: SETTLED,
+            name: 'settled-sand',
+            color: 0xa08050,
+            density: 1, friction: 0.7, restitution: 0.05,
+            destructible: true, destructionResistance: 0,
+            simulation: 'static',
+        };
+        const settlingSand: Material = {
+            ...sand,
+            settlesTo: SETTLED,
+            settleAfterTicks: 1,
+        };
+        const bm = new ChunkedBitmap({
+            width: 1, height: 2, chunkSize: 1,
+            materials: [settlingSand, stone, settledSand],
+        });
+        bm.setPixel(0, 0, settlingSand.id);
+        bm.setPixel(0, 1, stone.id);
+        // Tick 1 promotes sand → SETTLED. Run 100 more steps to
+        // confirm the static cell stays out of the active set.
+        for (let t = 0; t < 100; t++) CellularAutomaton.step(bm, t);
+        expect(bm.getPixel(0, 0)).toBe(SETTLED);
+        expect(bm.activeCells.size).toBe(0);
+    });
+});
+
 describe('CellularAutomaton.step — multi-cell water flow', () => {
     it('a tall water column poured onto a flat floor levels off', () => {
         // 13-wide; 6-cell column at x=6. After enough ticks, water

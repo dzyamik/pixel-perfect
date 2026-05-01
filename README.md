@@ -4,7 +4,7 @@
 
 ![pixel-perfect — destructible terrain demo](media/hero.gif)
 
-**Status:** `v2.3.0` — stable public surface; cellular-automaton fluid simulation now covers sand, water, oil, gas, and fire with density-ranked swaps and multi-cell horizontal flow. Sand-pile settling still bridges fluid sim to Box2D physics; fire ignites flammable materials and burns out via the per-cell timer. Local development only (not on npm yet).
+**Status:** `v2.4.0` — stable public surface; cellular-automaton fluid simulation covers sand, water, oil, gas, and fire with density-ranked swaps and multi-cell horizontal flow. Sand-pile settling still bridges fluid sim to Box2D physics; fire ignites flammable materials and burns out via the per-cell timer. v2.4 adds a sparse active-cell set so `step` is effectively free on a settled world and scales with moving cells (not world dimensions) under heavy fluid action. Local development only (not on npm yet).
 
 ## What this is
 

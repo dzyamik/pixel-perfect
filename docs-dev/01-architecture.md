@@ -469,22 +469,39 @@ This is enough for replay debugging, not enough for lockstep multiplayer.
 
 ## v2 — cellular-automaton fluid layer
 
-Shipped in `v2.0.0` (sand) and `v2.1.0` (water + density swap).
+Shipped in `v2.0.0` (sand), `v2.1.0` (water + density swap),
+`v2.2.0` (sand-pile settling), `v2.3.0` (oil / gas / fire +
+multi-cell flow), and `v2.4.0` (sparse active-cell tracking).
 
-`Material.simulation?: 'static' | 'sand' | 'water'` controls how a
-material moves. `'static'` (default for back-compat) generates Box2D
-colliders and never moves on its own. `'sand'` and `'water'` are
-fluid kinds processed by `CellularAutomaton.step(bitmap, tick)` —
-a pure one-tick simulator that mutates the bitmap in place.
+`Material.simulation?: SimulationKind` controls how a material
+moves. `'static'` (default for back-compat) generates Box2D
+colliders and never moves on its own. `'sand'`, `'water'`, `'oil'`,
+`'gas'`, and `'fire'` are mobile kinds processed by
+`CellularAutomaton.step(bitmap, tick)` — a pure one-tick simulator
+that mutates the bitmap in place.
 
-The simulator is bottom-up + per-tick L/R alternation:
+Density-ranked vertical swap (high → low):
+`sand (5) > water (4) > oil (3) > fire (2) > air (1) > gas (0)`.
+Static cells never swap. Diagonal slides and horizontal flow are
+air-only; multi-cell horizontal flow (`FLUID_FLOW_DIST = 4`)
+applies to all liquids and gas.
 
-  - Sand: fall straight down (allow swap into water — density rule),
-    or slide diagonally into pure air. Doesn't move horizontally.
-  - Water: fall straight down → diagonal-down → spread horizontally.
-    Less dense than sand; doesn't move into sand cells. The
-    horizontal-spread rule is what gives water its level-finding
-    behavior.
+**Active-cell tracking (v2.4)** — `step` iterates a sparse
+`Set<number>` of cell indices on `ChunkedBitmap.activeCells`
+instead of scanning the full bitmap. The set is maintained
+automatically: `setPixel` auto-marks the changed cell + its 8-cell
+Moore neighborhood once tracking is initialized. The sim's own
+swap-mutations and external carve / deposit / paint ops therefore
+propagate activation organically. Cells with ongoing state (fire
+timer, sand rest counter) explicitly call `markActive` to stay in
+the rotation; everything else drops on its non-moving tick and
+returns only when a neighbor's mutation re-adds it.
+
+Cost: O(active cells × log active cells) per tick (the log factor
+is the snapshot sort that orders rows bottom-up). For a settled
+world the set is empty and `step` is effectively a no-op. For a
+busy demo it scales with the moving cell count, not world
+dimensions.
 
 Critical interaction with the physics layer: `chunkToContours` and
 `componentToContours` filter the temp bitmap to **only** static
@@ -510,11 +527,5 @@ visualization.
 - Save/load serialization
 - Multi-resolution mipmapped chunks
 - Networking / lockstep
-- Active-cell tracking for the cellular automaton (currently
-  O(W·H) per tick; sparse-set tracking would gate cost on actual
-  fluid pixel count)
-- More fluid kinds (gas, oil, fire) — sand + water suffice for the
-  v2 demo but the dispatch in `CellularAutomaton.step` is structured
-  to extend
 
 These are architecturally accommodated (the layered design doesn't preclude any of them) but explicitly out of scope.

@@ -5,14 +5,28 @@ import type { Material } from '../types.js';
 /**
  * One-tick cellular-automaton step over the supplied bitmap.
  *
- * Each call processes every cell once in a bottom-up sweep so a grain
- * of sand or a drop of water falls one row per tick (single-pass
- * correctness — material already moved into row `y+1` blocks the same
- * cell in row `y` from also targeting that destination). Within each
- * row the scan direction alternates left-to-right vs right-to-left
- * across calls (controlled by `tick`), which kills the directional
- * bias an always-same-direction sweep would produce on diagonal
- * slides and horizontal liquid spread.
+ * Iterates the bitmap's sparse {@link ChunkedBitmap.activeCells} set
+ * — only cells that might have changed (or are known to have
+ * ongoing state like a fire timer or sand rest counter) are
+ * processed. The set is maintained automatically: every
+ * {@link ChunkedBitmap.setPixel} call adds the changed cell and its
+ * 8 neighbors so external carve / deposit / paint ops AND the sim's
+ * own swap-mutations keep activation propagating organically.
+ * Cells that didn't move and have no ongoing state drop out of the
+ * set and don't return until a neighbor's mutation re-activates
+ * them — once a world reaches steady state, `step` becomes a no-op.
+ *
+ * On the very first call the bitmap is scanned once
+ * ({@link ChunkedBitmap.enableActiveCellTracking}) to seed the set
+ * with cells placed before tracking was enabled.
+ *
+ * Within each tick the snapshot is processed bottom-up
+ * (`y = H-1 → 0`) so material falling from row `y` can't be
+ * re-processed in row `y+1`. Side preference is per-cell
+ * (`goRight === (x is even)`), so contiguous fluid blocks spread
+ * symmetrically instead of shifting en masse. The `tick` parameter
+ * flips a global L/R bias each call so a body of fluid alternates
+ * its preferred side, killing residual asymmetries.
  *
  * Five mobile fluid kinds are implemented; their behavior is
  * parameterised over a single generic `stepFluid` helper.
@@ -34,7 +48,9 @@ import type { Material } from '../types.js';
  *  - **`'fire'`** — stationary. Each tick: ignites the first
  *    adjacent `flammable` neighbor it finds (top, sides, bottom);
  *    the new fire cell starts at timer 0. Increments its own timer
- *    and dies (→ air) at the `burnDuration` threshold.
+ *    and dies (→ air) at the `burnDuration` threshold. Stays in
+ *    the active set until it dies regardless of whether anything
+ *    flammable is nearby.
  *
  * Density ranks for vertical swaps:
  *
@@ -47,11 +63,11 @@ import type { Material } from '../types.js';
  * horizontal flow are air-only — the swap bookkeeping stays
  * single-cell (no mid-flight three-cell shuffle).
  *
- * Cost: O(width × height) per tick. For a 1024 × 320 bitmap that's
- * ~327 K cells of cheap byte-grid look-ups — fine at 60 fps for
- * mid-size worlds. For very large worlds, gate the call behind a
- * "are there any fluid pixels currently?" flag or maintain a sparse
- * active-cell set.
+ * Cost: O(N log N) per tick where N is the number of currently-
+ * active cells (the log factor is the snapshot sort that orders
+ * rows bottom-up). For a mostly-settled world the active set drops
+ * to zero and `step` returns immediately. For a continuous pour it
+ * scales with the moving cells, not the world dimensions.
  *
  * The bitmap is mutated in place. Affected chunks are dirtied via
  * the bitmap's regular `setPixel` path, so a subsequent
@@ -68,53 +84,66 @@ import type { Material } from '../types.js';
  *               repeatedly without changing.
  */
 export function step(bitmap: ChunkedBitmap, tick = 0): void {
+    bitmap.enableActiveCellTracking();
+    const active = bitmap.activeCells;
+    if (active.size === 0) return;
+
     const W = bitmap.width;
     const H = bitmap.height;
     const goRight = (tick & 1) === 0;
     const materials = bitmap.materials;
+
+    // Snapshot to a sortable array, then clear the live set so the
+    // setPixel-driven activation calls during this tick populate the
+    // *next* tick's set without disturbing this iteration.
+    //
+    // The encoded form `idx = y*W + x` sorts descending into bottom-
+    // up row order naturally — within each row x descends, but per-
+    // cell side preference handles directional symmetry independently
+    // of x-iteration order.
+    const cells = [...active];
+    cells.sort((a, b) => b - a);
+    active.clear();
+
     // Cells that received fluid via in-row movement this tick. The
     // outer loop skips them — a water cell that just slid sideways
-    // shouldn't be picked up again as the loop continues to that x.
-    // Sand never moves to the same row, so the set stays empty for
-    // sand-only worlds.
+    // shouldn't be picked up again as the loop continues. Also used
+    // by upward-moving fluids (gas) so the not-yet-visited row they
+    // just rose into doesn't re-process them, and by fire so a
+    // freshly-ignited neighbor doesn't spread further this tick.
     const movedThisTick = new Set<number>();
 
-    // Bottom-up so material falling from row y can't be re-processed
-    // in row y+1 within the same tick.
-    for (let y = H - 1; y >= 0; y--) {
-        const xStart = goRight ? 0 : W - 1;
-        const xEnd = goRight ? W : -1;
-        const dx = goRight ? 1 : -1;
-        for (let x = xStart; x !== xEnd; x += dx) {
-            if (movedThisTick.has(y * W + x)) continue;
+    for (const idx of cells) {
+        if (movedThisTick.has(idx)) continue;
+        const y = (idx / W) | 0;
+        const x = idx - y * W;
 
-            const id = bitmap.getPixel(x, y);
-            if (id === 0) continue;
-            const material = materials.get(id);
-            if (material === undefined) continue;
-            const kind = material.simulation;
-            if (kind === undefined || kind === 'static') continue;
+        const id = bitmap.getPixel(x, y);
+        if (id === 0) continue;
+        const material = materials.get(id);
+        if (material === undefined) continue;
+        const kind = material.simulation;
+        if (kind === undefined || kind === 'static') continue;
 
-            if (kind === 'sand') {
-                stepSand(bitmap, materials, x, y, id, W, H, goRight, movedThisTick);
-            } else if (kind === 'water') {
-                stepFluid(
-                    bitmap, materials, x, y, id, W, H, goRight, movedThisTick,
-                    +1, RANK_WATER, FLUID_FLOW_DIST,
-                );
-            } else if (kind === 'oil') {
-                stepFluid(
-                    bitmap, materials, x, y, id, W, H, goRight, movedThisTick,
-                    +1, RANK_OIL, FLUID_FLOW_DIST,
-                );
-            } else if (kind === 'gas') {
-                stepFluid(
-                    bitmap, materials, x, y, id, W, H, goRight, movedThisTick,
-                    -1, RANK_GAS, FLUID_FLOW_DIST,
-                );
-            } else if (kind === 'fire') {
-                stepFire(bitmap, materials, x, y, id, material, W, H, movedThisTick);
-            }
+        if (kind === 'sand') {
+            stepSand(bitmap, materials, x, y, id, W, H, goRight, movedThisTick);
+        } else if (kind === 'water') {
+            stepFluid(
+                bitmap, materials, x, y, id, W, H, goRight, movedThisTick,
+                +1, RANK_WATER, FLUID_FLOW_DIST,
+            );
+        } else if (kind === 'oil') {
+            stepFluid(
+                bitmap, materials, x, y, id, W, H, goRight, movedThisTick,
+                +1, RANK_OIL, FLUID_FLOW_DIST,
+            );
+        } else if (kind === 'gas') {
+            stepFluid(
+                bitmap, materials, x, y, id, W, H, goRight, movedThisTick,
+                -1, RANK_GAS, FLUID_FLOW_DIST,
+            );
+        } else if (kind === 'fire') {
+            stepFire(bitmap, materials, x, y, id, material, W, H, movedThisTick);
         }
     }
 }
@@ -315,6 +344,14 @@ function stepFluid(
  * Sand step: density-aware fall + air-only diagonal slide. Wraps
  * {@link stepFluid} (with `yDir=+1`, `flowDist=0`, sand rank), then
  * runs settling logic if the cell didn't move.
+ *
+ * Active-set bookkeeping: `setPixel` auto-marks moved cells, so the
+ * fall path needs no explicit re-add. A non-moving cell drops out
+ * of the active set unless this material has settling configured,
+ * in which case the rest-timer needs to keep ticking — we mark
+ * the cell active explicitly until either it moves (because a
+ * neighbor opened up) or it promotes (`setPixel` fires when
+ * settling and the new id's auto-mark covers re-activation).
  */
 function stepSand(
     bitmap: ChunkedBitmap,
@@ -336,6 +373,17 @@ function stepSand(
     // Didn't move this tick — increment the rest timer; if at the
     // promotion threshold, settle in place to a static variant.
     maybeSettle(bitmap, materials, x, y, id);
+
+    // If the cell is still our sand (i.e. didn't promote) and the
+    // material has a settling config, keep it active so the timer
+    // ticks again next call. Plain non-settling sand drops from
+    // the active set; a neighbor's mutation will re-add it via
+    // setPixel auto-mark when conditions change.
+    if (bitmap.getPixel(x, y) !== id) return;
+    const material = materials.get(id);
+    if (material === undefined) return;
+    if (material.settlesTo === undefined || material.settleAfterTicks === undefined) return;
+    bitmap.markActive(x, y);
 }
 
 /**
@@ -429,8 +477,13 @@ function stepFire(
 
     // Age this fire cell. When it reaches the burn duration, die.
     if (current + 1 >= burnDuration) {
-        bitmap.setPixel(x, y, 0);
+        bitmap.setPixel(x, y, 0);  // setPixel auto-marks neighbors
         return;
     }
     timers[idx] = current === 255 ? 255 : current + 1;
+    // Still alive — keep this cell in the active set so its timer
+    // ticks again next call, regardless of whether anything
+    // flammable was found this tick. A lone flame in midair must
+    // still age and die.
+    bitmap.markActive(x, y);
 }

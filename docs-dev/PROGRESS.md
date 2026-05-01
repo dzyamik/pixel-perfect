@@ -2,7 +2,7 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-04-30, mid-Phase-3 (physics correctness done, plugin/sprite next)
+> Last updated: 2026-05-01, v2.4 active-cell tracking shipped
 
 ---
 
@@ -23,10 +23,110 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v2.x — dev-server media fix | ✅ done | `v2.1.1` |
 | v2.2 — sand-pile-becomes-static (settling) | ✅ done | `v2.2.0` |
 | v2.3 — more fluid kinds (gas / oil / fire) + multi-cell flow | ✅ done | `v2.3.0` |
-| v2.4 — active-cell tracking (perf) | ⬜ planned | — |
+| v2.4 — active-cell tracking (perf) | ✅ done | `v2.4.0` |
 | v2.5 — VitePress concept-and-recipes site + tutorial | ⬜ planned | — |
 
-Test suite: 291 tests across 20 files, ~1.7 s. typecheck and lint clean.
+Test suite: 307 tests across 20 files, ~1.5 s. typecheck and lint clean.
+
+---
+
+## v2.4 — sparse active-cell tracking (2026-05-01)
+
+The cellular automaton no longer scans the full bitmap every tick.
+Instead it iterates a per-bitmap **active-cell set** containing
+just the cells that might have changed since the last tick (or are
+known to have ongoing state like a fire timer or sand rest
+counter). For mostly-settled worlds the call is effectively free —
+the set drops to size 0 and `step` returns immediately.
+
+### What shipped
+
+- **`ChunkedBitmap.activeCells: Set<number>`** — sparse set
+  encoded as `y * width + x`. Lazy-allocated; same pattern as
+  `cellTimers`. Public read access.
+- **`ChunkedBitmap.enableActiveCellTracking()`** — initializes
+  the set and seeds it with every non-air, non-static cell
+  currently in the bitmap. Idempotent. Called automatically from
+  `CellularAutomaton.step` on its first run, but exposed so users
+  who want the auto-mark side-effect on `setPixel` to fire from
+  game start can call it eagerly.
+- **`ChunkedBitmap.markActive(x, y)`** — manual entry, used by
+  the sim to keep cells with ongoing state in the rotation when
+  `setPixel` wasn't called.
+- **`ChunkedBitmap.hasActiveCellTracking: boolean`** — peek
+  without lazy-init.
+- **`setPixel` auto-mark** — once tracking is initialized, every
+  mutation adds the changed cell **and its 8-cell Moore
+  neighborhood** to the active set. External carve / deposit /
+  paint ops, AND the sim's own swap-mutations, propagate
+  activation organically without extra plumbing. No-op until
+  tracking is initialized — non-fluid users pay zero overhead.
+- **`CellularAutomaton.step` rewritten** to: enable tracking
+  (lazy-seed), snapshot + sort active cells descending (= bottom-
+  up rows), clear the live set, iterate. The `setPixel`
+  auto-marks during processing populate the *next* tick's set;
+  cells with ongoing state explicitly call `markActive` to stay
+  in.
+- **Per-kind activation rules:**
+  - Sand that didn't move: drops from set unless the material
+    has `settlesTo` + `settleAfterTicks` (rest-timer
+    ticking) — those re-mark themselves.
+  - Fluid (water/oil/gas) that didn't move: drops from set; a
+    neighbor's `setPixel` auto-mark re-adds when conditions
+    change.
+  - Fire: always re-marks itself until the burn timer hits
+    `burnDuration`. A lone flame ages and dies even with no
+    flammable neighbors.
+
+### Why this is safe (correctness invariants)
+
+- **Bottom-up order preserved**: encoded indices sort descending =
+  rows visit `y = H-1 → 0`, matching the prior full-sweep order.
+- **`movedThisTick` still in use** for the rising-tunnel guard
+  (gas) and the in-row horizontal-flow guard (water/oil/gas) —
+  unchanged from v2.3.
+- **First-call seeding** ensures cells placed by `setPixel`
+  *before* the sim ever runs are picked up. The seed scan is
+  O(W × H) once; subsequent ticks are O(active cells × log
+  active cells).
+- **No new race window**: snapshot to array + clear + iterate
+  semantics mean `setPixel` calls during this tick build the
+  *next* tick's set. The current iteration is read-only against
+  the snapshot.
+
+### Files involved
+
+- `src/core/ChunkedBitmap.ts` — `_activeCells` field;
+  `_touchActiveNeighborhood` private helper;
+  `enableActiveCellTracking`, `markActive`, `activeCells`,
+  `hasActiveCellTracking` public API; `setPixel` auto-mark hook.
+- `src/core/algorithms/CellularAutomaton.ts` — `step` rewritten
+  to consume the sparse set; `stepSand` and `stepFire` updated
+  to re-mark themselves when their timer is ticking but they
+  didn't move.
+- `tests/core/ChunkedBitmap.test.ts` — 8 new tests covering the
+  active-set API (lazy init, seeding, idempotency, neighborhood
+  marking, bounds clipping, no-op edge cases).
+- `tests/core/algorithms/CellularAutomaton.test.ts` — 8 new
+  tests covering: first-step seeding, settled world drops to
+  empty, settling-sand re-marks itself, stuck fluid drops, carve
+  reactivates a stuck cell, fire stays active until burnout,
+  empty-bitmap step is a no-op, settled-static stays out of the
+  set across many ticks.
+
+### Performance characteristics
+
+- **Settled world**: `step` returns after a single empty-set
+  check. ~10 ns.
+- **Active pour (~50 falling cells)**: snapshot (50), sort
+  (negligible), iterate (50 cell processes + ~9 setPixel
+  auto-marks each ≈ ~450 set adds). Sub-millisecond.
+- **First-call seed**: O(W × H) one-shot. Identical cost to a
+  single full-sweep tick of the v2.3 implementation.
+- **Carving non-fluid terrain (no fluid materials in play)**:
+  zero overhead — `enableActiveCellTracking` is never called,
+  `_activeCells` stays null, `setPixel` skips the auto-mark
+  branch.
 
 ---
 
