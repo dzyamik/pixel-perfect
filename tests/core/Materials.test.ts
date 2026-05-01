@@ -71,6 +71,118 @@ describe('MaterialRegistry', () => {
                 /duplicate|already/i,
             );
         });
+
+        // ── v2.6.1 timer-uint8 range checks ──
+        // The cellTimers Uint8Array saturates at 255, so any
+        // threshold above 256 would silently be unreachable. The
+        // registry rejects out-of-range values up front so users
+        // can't ship a fire that burns forever or a sand that never
+        // promotes. See docs-dev/04-tuning-research.md.
+
+        const fireBase: Material = {
+            id: 7, name: 'fire', color: 0xff7030,
+            density: 0, friction: 0, restitution: 0,
+            destructible: true, destructionResistance: 0,
+            simulation: 'fire',
+        };
+
+        it('accepts burnDuration in 1..256', () => {
+            for (const d of [1, 40, 256]) {
+                const r = new MaterialRegistry();
+                expect(() =>
+                    r.register({ ...fireBase, burnDuration: d }),
+                ).not.toThrow();
+            }
+        });
+
+        it('rejects fire material with no burnDuration', () => {
+            const r = new MaterialRegistry();
+            expect(() => r.register(fireBase)).toThrow(/burnDuration/i);
+        });
+
+        it('rejects burnDuration <= 0', () => {
+            const r = new MaterialRegistry();
+            expect(() =>
+                r.register({ ...fireBase, burnDuration: 0 }),
+            ).toThrow(/burnDuration.*1\.\.256/i);
+            expect(() =>
+                r.register({ ...fireBase, id: 8, burnDuration: -1 }),
+            ).toThrow(/burnDuration/i);
+        });
+
+        it('rejects burnDuration > 256 (uint8 saturation gotcha)', () => {
+            const r = new MaterialRegistry();
+            expect(() =>
+                r.register({ ...fireBase, burnDuration: 257 }),
+            ).toThrow(/burnDuration.*1\.\.256/i);
+            expect(() =>
+                r.register({ ...fireBase, id: 8, burnDuration: 1000 }),
+            ).toThrow(/burnDuration/i);
+        });
+
+        it('rejects non-integer burnDuration', () => {
+            const r = new MaterialRegistry();
+            expect(() =>
+                r.register({ ...fireBase, burnDuration: 40.5 }),
+            ).toThrow(/burnDuration/i);
+        });
+
+        const sandBase: Material = {
+            id: 5, name: 'sand', color: 0xd4b06a,
+            density: 1, friction: 0.5, restitution: 0.05,
+            destructible: true, destructionResistance: 0,
+            simulation: 'sand',
+        };
+
+        it('accepts settleAfterTicks in 1..256 when settlesTo is set', () => {
+            for (const t of [1, 30, 256]) {
+                const r = new MaterialRegistry();
+                expect(() =>
+                    r.register({
+                        ...sandBase,
+                        settlesTo: 99,
+                        settleAfterTicks: t,
+                    }),
+                ).not.toThrow();
+            }
+        });
+
+        it('rejects settlesTo without settleAfterTicks', () => {
+            const r = new MaterialRegistry();
+            expect(() =>
+                r.register({ ...sandBase, settlesTo: 99 }),
+            ).toThrow(/settleAfterTicks/i);
+        });
+
+        it('rejects settleAfterTicks <= 0', () => {
+            const r = new MaterialRegistry();
+            expect(() =>
+                r.register({
+                    ...sandBase,
+                    settlesTo: 99,
+                    settleAfterTicks: 0,
+                }),
+            ).toThrow(/settleAfterTicks.*1\.\.256/i);
+        });
+
+        it('rejects settleAfterTicks > 256 (uint8 saturation gotcha)', () => {
+            const r = new MaterialRegistry();
+            expect(() =>
+                r.register({
+                    ...sandBase,
+                    settlesTo: 99,
+                    settleAfterTicks: 257,
+                }),
+            ).toThrow(/settleAfterTicks.*1\.\.256/i);
+        });
+
+        it('skips settleAfterTicks check when settlesTo is undefined', () => {
+            // Plain sand with no settling configured — no validation
+            // applies. (The check only fires when the user opts into
+            // settling by setting settlesTo.)
+            const r = new MaterialRegistry();
+            expect(() => r.register(sandBase)).not.toThrow();
+        });
     });
 
     describe('get vs getOrThrow', () => {

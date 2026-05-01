@@ -95,9 +95,11 @@ export interface Material {
      * a `'static'`-simulation variant of the same visual color so
      * the pile becomes part of the static collider mesh.
      *
-     * Both fields must be set for settling to engage; either one
-     * undefined disables it. Threshold caps at 255 (the underlying
-     * `cellTimers` Uint8Array's max).
+     * Both fields must be set together for settling to engage —
+     * registering with one but not the other throws at registration
+     * time. `settleAfterTicks` must be in `1..256` (the cellTimers
+     * `Uint8Array` saturates at 255, so a threshold above 256 would
+     * never be reached and the cell would silently never promote).
      *
      * Bridges fluid sim and physics: a sand pile that's been at
      * rest for 30 ticks (~0.5 s at 60 fps) becomes part of the
@@ -117,8 +119,12 @@ export interface Material {
     /**
      * Lifetime in ticks for cells of this material when its
      * `simulation` is `'fire'`. After this many ticks the cell
-     * turns to air (id `0`). Required for `'fire'` materials;
-     * ignored otherwise. Caps at 255 (the `cellTimers` byte limit).
+     * turns to air (id `0`). Required for `'fire'` materials —
+     * registering a fire material without `burnDuration` throws.
+     * Must be in `1..256` (the cellTimers `Uint8Array` saturates
+     * at 255, so values above 256 would never reach the threshold
+     * and the cell would silently burn forever). Ignored for
+     * non-fire materials.
      */
     burnDuration?: number;
 }

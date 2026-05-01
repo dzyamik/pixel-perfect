@@ -27,8 +27,49 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | ~~v2.5 — VitePress concept-and-recipes site + tutorial~~ | retired (existing docs cover the gap; replaced by v2.5/v2.6 below) | — |
 | v2.5 — sim tuning research + simulation concepts doc | ✅ done | — |
 | v2.6 — in-demo code-snippet tutorials (per-demo + recipes index) | ✅ done | `v2.6.0` |
+| v2.6.1 — enforce timer-uint8 ranges at material registration | ✅ done | `v2.6.1` |
 
-Test suite: 322 tests across 21 files. typecheck and lint clean.
+Test suite: 332 tests across 21 files. typecheck and lint clean.
+
+---
+
+## v2.6.1 — registration-time validation for timer thresholds (2026-05-01)
+
+`MaterialRegistry.register` now validates the per-cell timer
+thresholds at registration time so the silent infinite-burn /
+never-promote footguns from `04-tuning-research.md` are gone.
+Throws on:
+
+- A `'fire'`-simulation material with no `burnDuration` set.
+- `burnDuration` outside `1..256` or non-integer.
+- A material with `settlesTo` set but no `settleAfterTicks`.
+- `settleAfterTicks` outside `1..256` or non-integer.
+
+The bound `1..256` matches the `cellTimers` `Uint8Array`
+saturation behavior: `current + 1 ≥ threshold` reaches `256`
+once the timer pegs at `255`, so `256` is the practical max.
+Above that, the threshold is silently unreachable and the cell
+never burns out / never promotes.
+
+### Files involved
+
+- `src/core/Materials.ts` — extended `register` with the four
+  range checks. Error messages name the field, show the offending
+  value, and point at `docs-dev/04-tuning-research.md` for
+  context.
+- `src/core/types.ts` — TSDoc on `Material.burnDuration` and
+  `Material.settleAfterTicks` updated to reflect the enforced
+  range.
+- `tests/core/Materials.test.ts` — 10 new tests covering accept
+  cases at the boundaries (1, 256), reject cases below/above the
+  range, missing-paired-field combinations, and non-integer
+  rejection.
+- `tests/core/algorithms/CellularAutomaton.test.ts` — two probe-
+  derived tests that previously asserted `burnDuration=0` and
+  `settleAfterTicks=0` are now `=1` (minimum legal value with
+  identical observed behavior).
+
+---
 
 ---
 

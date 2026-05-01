@@ -1140,27 +1140,24 @@ describe('CellularAutomaton.step — multi-cell water flow', () => {
 // ──────────────────────────────────────────────────────────────────────
 
 describe('CellularAutomaton.step — boundary timers', () => {
-    it('burnDuration=0 and burnDuration=1 both kill fire on its first step', () => {
-        function dieAt(burnDuration: number): number {
-            const fireMat: Material = {
-                ...fire, burnDuration,
-            };
-            const bm = new ChunkedBitmap({
-                width: 1, height: 1, chunkSize: 1,
-                materials: [fireMat],
-            });
-            bm.setPixel(0, 0, fireMat.id);
-            for (let t = 0; t < 5; t++) {
-                CellularAutomaton.step(bm, t);
-                if (bm.getPixel(0, 0) === 0) return t;
-            }
-            return -1;
-        }
-        expect(dieAt(0)).toBe(0);
-        expect(dieAt(1)).toBe(0);
+    it('burnDuration=1 kills fire on its first step', () => {
+        // Minimum legal value (registry rejects burnDuration < 1).
+        // The condition `current + 1 >= burnDuration` fires at
+        // current=0, so the cell turns to air on step 0.
+        const fireMat: Material = { ...fire, burnDuration: 1 };
+        const bm = new ChunkedBitmap({
+            width: 1, height: 1, chunkSize: 1,
+            materials: [fireMat],
+        });
+        bm.setPixel(0, 0, fireMat.id);
+        CellularAutomaton.step(bm, 0);
+        expect(bm.getPixel(0, 0)).toBe(0);
     });
 
-    it('settleAfterTicks=0 promotes on first stationary tick', () => {
+    it('settleAfterTicks=1 promotes on first stationary tick', () => {
+        // Minimum legal value (registry rejects < 1). Sand on stone
+        // can't fall; maybeSettle bumps timer 0→1, threshold reached,
+        // promote.
         const SETTLED = 4;
         const settledSand: Material = {
             id: SETTLED, name: 'settled', color: 0xa08050,
@@ -1171,7 +1168,7 @@ describe('CellularAutomaton.step — boundary timers', () => {
         const settlingSand: Material = {
             ...sand,
             settlesTo: SETTLED,
-            settleAfterTicks: 0,
+            settleAfterTicks: 1,
         };
         const bm = new ChunkedBitmap({
             width: 1, height: 2, chunkSize: 1,

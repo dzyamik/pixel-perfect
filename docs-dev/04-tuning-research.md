@@ -192,9 +192,13 @@ asserts upper bounds on step cost for canonical scenarios.
 
 ## Open action items
 
-1. **Enforce `burnDuration ∈ [1, 256]`** at material registration
-   (or warn loudly). Prevents the silent infinite-burn footgun.
-2. **Same for `settleAfterTicks`.**
+1. ✅ **Enforce `burnDuration ∈ [1, 256]`** at material registration
+   — landed in v2.6.1. `MaterialRegistry.register` throws on
+   out-of-range values, missing `burnDuration` for `'fire'`
+   materials, and non-integer thresholds.
+2. ✅ **Same for `settleAfterTicks`** — landed in v2.6.1. Throws
+   when `settlesTo` is set without `settleAfterTicks`, or when
+   the threshold is outside `1..256`.
 3. **Worked example in TSDoc** for `burnDuration` and
    `settleAfterTicks` clarifying the off-by-one.
 4. **Per-material `FLUID_FLOW_DIST`** if users hit the
@@ -204,5 +208,4 @@ asserts upper bounds on step cost for canonical scenarios.
    a bug fix.
 6. **Formal benchmark fixture** for v2.4 step cost.
 
-These are *opt-in* improvements, not v2.5 blockers. Document the
-gotchas now (this file); ship enforcement in a future minor.
+Items 3–6 are still opt-in improvements; not v2.x blockers.
