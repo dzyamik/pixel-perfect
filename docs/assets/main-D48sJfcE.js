@@ -302,13 +302,25 @@ class FallingSandScene extends Phaser.Scene {
     }
 
     override update(_time: number, deltaMs: number): void {
-        // Same pattern as demos 03/04/06: rebuild terrain (which
-        // includes the auto-simulate sand/water tick AND any chunk
-        // promotions to settled-sand) before the physics step, so
-        // the step sees the freshest collider mesh.
-        this.terrain.update();
-
+        // Per-phase timing for profiling. v3.0.3 closed the
+        // collider-rebuild stall, but the user's "10 fps with many
+        // elements" report still warrants confirming where the
+        // remaining frame budget goes. Numbers surface in the
+        // stats overlay so the user sees them in real time.
+        const t0 = performance.now();
+        this.terrain.simStep();
+        const tSim = performance.now();
+        // Manual flush of the physics queue + repaint, lifted out of
+        // \`terrain.update()\` so we can time them separately.
+        this.terrain.bitmap.forEachDirtyChunk((chunk) => {
+            this.terrain.physics?.queue.enqueueChunk(chunk);
+        });
+        this.terrain.physics?.queue.flush(this.terrain.physics.adapter);
+        const tPhysFlush = performance.now();
+        this.terrain.renderer.repaintDirty();
+        const tRepaint = performance.now();
         b2.WorldStep({ worldId: this.worldId, deltaTime: deltaMs / 1000 });
+        const tBox2D = performance.now();
 
         // Sync each ball's image with its body's transform. Cull
         // anything that fell off the world.
@@ -327,9 +339,15 @@ class FallingSandScene extends Phaser.Scene {
         }
 
         const counts = this.countFluids();
+        const fmt = (ms: number): string => ms.toFixed(2) + 'ms';
         this.stats.update({
             brush: this.brushRadius,
             tool: this.activeFluid.name,
+            sim: fmt(tSim - t0),
+            phys: fmt(tPhysFlush - tSim),
+            paint: fmt(tRepaint - tPhysFlush),
+            box2d: fmt(tBox2D - tRepaint),
+            active: this.terrain.bitmap.activeCells.size,
             sand: counts.sand,
             settled: counts.settledSand,
             water: counts.water,

@@ -163,6 +163,24 @@ describe('CellularAutomaton.step', () => {
         for (let t = 0; t < 10; t++) CellularAutomaton.step(bm, t);
     });
 
+    bench('thin sheet: 12000 cells in a 240x50 puddle (mostly edges)', () => {
+        // Edge-heavy scenario: long, shallow water spreading
+        // across a wide floor. The lateral chain runs all the
+        // way to the edges of the puddle most ticks, so the
+        // adaptive `LATERAL_REACH` fork has more impact than
+        // in a deep pool.
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 32,
+            materials: [stone, water],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        for (let y = H - 51; y < H - 1; y++) {
+            for (let x = 8; x < 248; x++) bm.setPixel(x, y, water.id);
+        }
+        CellularAutomaton.step(bm, 0);
+        for (let t = 0; t < 30; t++) CellularAutomaton.step(bm, t);
+    });
+
     bench('first-call seed scan (256×128 cold bitmap)', () => {
         // Build, then call step once — measures the seed scan.
         const bm = new ChunkedBitmap({

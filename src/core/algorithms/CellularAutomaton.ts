@@ -112,6 +112,16 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
     // freshly-ignited neighbor doesn't spread further this tick.
     const movedThisTick = new Set<number>();
 
+    // Adaptive lateral reach (v3.0.4). At low active counts use the
+    // full `LATERAL_REACH_MAX` for fast surface flattening (5×
+    // gravity rate). Past `LATERAL_REACH_HIGH_LOAD` cells in the
+    // active set, drop to `LATERAL_REACH_HIGH_LOAD_VAL` so heavy
+    // pours don't blow the frame budget. Cost scales linearly with
+    // reach, so halving it ~halves the per-cell sim cost.
+    const lateralReach = cells.length > LATERAL_REACH_HIGH_LOAD
+        ? LATERAL_REACH_HIGH_LOAD_VAL
+        : LATERAL_REACH_MAX;
+
     for (const idx of cells) {
         if (movedThisTick.has(idx)) continue;
         const y = (idx / W) | 0;
@@ -127,11 +137,11 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
         if (kind === 'sand') {
             stepSand(bitmap, materials, x, y, id, W, H, goRight, movedThisTick);
         } else if (kind === 'water') {
-            stepLiquid(bitmap, materials, x, y, id, W, H, +1, RANK_WATER);
+            stepLiquid(bitmap, materials, x, y, id, W, H, +1, RANK_WATER, lateralReach);
         } else if (kind === 'oil') {
-            stepLiquid(bitmap, materials, x, y, id, W, H, +1, RANK_OIL);
+            stepLiquid(bitmap, materials, x, y, id, W, H, +1, RANK_OIL, lateralReach);
         } else if (kind === 'gas') {
-            stepLiquid(bitmap, materials, x, y, id, W, H, -1, RANK_GAS);
+            stepLiquid(bitmap, materials, x, y, id, W, H, -1, RANK_GAS, lateralReach);
         } else if (kind === 'fire') {
             stepFire(bitmap, materials, x, y, id, material, W, H, movedThisTick);
         }
@@ -193,15 +203,23 @@ const MAX_FLOW = 1.0;
 const LATERAL_EQUALIZE = 0.5;
 /**
  * Maximum number of cells on each side that a fluid cell tries
- * to equalize with per tick. With `LATERAL_REACH = 5`, surface
- * flattening propagates ~5 cells per tick — roughly 5× the
- * single-cell-per-tick gravity rate. Each step uses fresh state
- * so mass cascades outward without a separate multi-pass loop.
- *
- * Higher values flatten faster but cost more per `stepLiquid`
- * call (~2 transfers per d). Capped at 16 for sanity.
+ * to equalize with per tick when the simulation is "lightly
+ * loaded" (small active set). Surface flattening propagates
+ * ~`LATERAL_REACH_MAX` cells per tick — `5` is roughly 5× the
+ * single-cell-per-tick gravity rate (the user-requested feel).
  */
-const LATERAL_REACH = 5;
+const LATERAL_REACH_MAX = 5;
+/**
+ * Threshold (in active-set size) above which the cellular
+ * automaton drops to {@link LATERAL_REACH_HIGH_LOAD_VAL} for
+ * the tick. The scan cost in `stepLiquid` is linear in reach,
+ * so halving it ~halves the per-cell sim cost — useful when a
+ * sustained pour blows the frame budget. The trade-off is
+ * slower spread, but at high load the user is filling cells
+ * faster than the sim can settle anyway.
+ */
+const LATERAL_REACH_HIGH_LOAD = 8000;
+const LATERAL_REACH_HIGH_LOAD_VAL = 2;
 
 /**
  * Given two stacked cells with combined mass `total`, returns
@@ -257,6 +275,7 @@ function stepLiquid(
     H: number,
     yDir: number,
     srcRank: number,
+    lateralReach: number,
 ): void {
     // v3.0.3 perf: cache the mass array reference and use direct
     // index access. setMass(...) does ~30 lookups + bookkeeping
@@ -339,7 +358,7 @@ function stepLiquid(
     // neighbors.
     let leftDone = false;
     let rightDone = false;
-    for (let d = 1; d <= LATERAL_REACH; d++) {
+    for (let d = 1; d <= lateralReach; d++) {
         if (remaining < MIN_MASS) break;
         if (leftDone && rightDone) break;
         for (let s = 0; s < 2; s++) {

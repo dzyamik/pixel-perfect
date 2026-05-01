@@ -40,8 +40,77 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v3.0.1 — flatten surfaces + evaporate orphans | ✅ done | `v3.0.1` |
 | v3.0.2 — multi-cell lateral reach (5× gravity flatten speed) | ✅ done | `v3.0.2` |
 | v3.0.3 — perf: fast-path mass access + skip fluid collider rebuilds | ✅ done | `v3.0.3` |
+| v3.0.4 — demo 09 per-frame profiling + adaptive LATERAL_REACH | ✅ done | `v3.0.4` |
 
 Test suite: 359 tests across 21 files. typecheck and lint clean.
+
+---
+
+## v3.0.4 — profiling + adaptive lateral reach (2026-05-01)
+
+User-reported v3.0.3 result: "it is better, but probably there
+are even more effective approaches."
+
+### (b) Per-frame profiling in demo 09
+
+`examples/09-falling-sand/main.ts` now times each phase of the
+frame and surfaces the numbers in the stats overlay:
+
+- `sim`    — `terrain.simStep()` (the cellular-automaton tick).
+- `phys`   — physics queue flush (collider rebuilds for dirty
+  chunks).
+- `paint`  — `terrain.renderer.repaintDirty()` (canvas writes
+  + GPU upload).
+- `box2d`  — `b2.WorldStep`.
+- `active` — current active-cell count for the next tick.
+
+The numbers shift on the fly while you pour. Use them to see
+which phase is actually eating the frame budget — `v3.0.3`
+already collapsed `phys` for fluid-only changes, so the
+remaining culprit is usually `sim` or `paint` depending on
+cell count and chunk dirty rate.
+
+### (a) Adaptive `LATERAL_REACH`
+
+Lateral reach (the "5× of gravity" spread rate from v3.0.2) is
+the dominant factor in `stepLiquid` cost. Below
+`LATERAL_REACH_HIGH_LOAD = 8000` active cells, reach stays at
+`5` (full visual feel). Above the threshold, reach drops to
+`2`, halving the per-cell sim cost while keeping the spread
+visible. The trade-off: at very high loads the surface
+flattens slower, but at that point the user is filling cells
+faster than the sim can settle anyway.
+
+### Bench
+
+| Scenario | v3.0.3 | v3.0.4 |
+|---|---|---|
+| Settled world | ~5 µs/step | ~5 µs/step |
+| Active pour (~100 cells) | ~41 µs/step | ~41 µs/step |
+| Big pour (~5000 cells, below threshold) | ~1.3 ms/step | ~1.4 ms/step |
+| Huge pour (~25000 cells, above threshold) | ~6.6 ms/step | ~6.7 ms/step |
+| Thin sheet (~12000 cells, edge-heavy) | n/a | ~2.0 ms/step |
+
+The adaptive-reach savings show up in **edge-heavy** scenarios
+(thin sheets, complex puddles) where most cells run the full
+lateral chain. In bulk pools the v3.0.3 left/right short-
+circuit already caught most of the cost, so adaptive reach
+adds little. The user's demo-09 scenario is somewhere
+in-between depending on how they pour.
+
+### Files involved
+
+- `examples/09-falling-sand/main.ts` — phase timing in
+  `update()`; `sim` / `phys` / `paint` / `box2d` / `active`
+  surfaced in the stats overlay.
+- `src/core/algorithms/CellularAutomaton.ts` —
+  `LATERAL_REACH` split into `LATERAL_REACH_MAX` / `_VAL`;
+  `step()` picks reach based on snapshot size; `stepLiquid`
+  takes `lateralReach` parameter.
+- `tests/perf/CellularAutomaton.bench.ts` — new "thin sheet"
+  scenario.
+
+---
 
 ---
 
