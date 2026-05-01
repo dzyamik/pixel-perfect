@@ -24,9 +24,70 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v2.2 — sand-pile-becomes-static (settling) | ✅ done | `v2.2.0` |
 | v2.3 — more fluid kinds (gas / oil / fire) + multi-cell flow | ✅ done | `v2.3.0` |
 | v2.4 — active-cell tracking (perf) | ✅ done | `v2.4.0` |
-| v2.5 — VitePress concept-and-recipes site + tutorial | ⬜ planned | — |
+| ~~v2.5 — VitePress concept-and-recipes site + tutorial~~ | retired (existing docs cover the gap; replaced by v2.5/v2.6 below) | — |
+| v2.5 — sim tuning research + simulation concepts doc | ⬜ planned | — |
+| v2.6 — in-demo code-snippet tutorials (per-demo + recipes index) | ⬜ planned | — |
 
 Test suite: 307 tests across 20 files, ~1.5 s. typecheck and lint clean.
+
+---
+
+## v2.5 / v2.6 plan (2026-05-01)
+
+The original v2.5 entry — a VitePress concept-and-recipes site —
+is retired. Reasoning: the README, `01-architecture.md`, the
+auto-generated TypeDoc API ref, and the inline TSDoc on every
+exported symbol already cover what a VitePress site would carry.
+Several hours of scaffolding for marginal gain.
+
+Replaced with two narrower deliverables that close real gaps:
+
+### v2.5 — sim tuning research + simulation concepts doc
+
+1. **`docs-dev/04-tuning-research.md`** — audit the cellular
+   automaton's tunable parameters (`FLUID_FLOW_DIST`,
+   `burnDuration`, `settleAfterTicks`) for sensible defaults and
+   document their visual / perf trade-offs. Identify edge cases
+   not currently tested:
+   - `burnDuration = 0` (instant burnout?)
+   - `settleAfterTicks = 0` (immediate settle?)
+   - very tall water columns leveling under low `FLUID_FLOW_DIST`
+   - dense fire fields (every cell on fire)
+   - mixed-rank stacks (sand on water on oil on gas)
+   - threshold > 255 (Uint8Array clamp behaviour)
+
+   Add tests for any obviously-missing edge case. Output is the
+   research doc + maybe a handful of new tests.
+2. **`docs-dev/05-simulation.md`** — consolidate the cellular
+   automaton design rationale that's currently scattered across
+   TSDoc and `01-architecture.md`: density rules, per-cell L/R
+   preference, bottom-up scan order + scan-order edge cases
+   (rising-tunnel, fire-cascade), `movedThisTick` invariants,
+   active-cell tracking semantics, settle/burn timers. The doc
+   future-you reads to understand *why* the sim is shaped the
+   way it is.
+
+### v2.6 — in-demo code-snippet tutorials
+
+Each demo's `index.html` renders the running game alongside the
+relevant source as an extractable, copy-pasteable snippet card.
+
+- **`examples/_shared/code-panel.ts`** — at demo load time,
+  fetches the demo's own `main.ts`, parses
+  `// @snippet:start <name>` / `// @snippet:end` markers (with
+  optional `// @snippet:desc <prose>` lines), renders each block
+  as a discrete card with a "copy" button. Side panel on
+  desktop, collapsed-below on mobile.
+- **Syntax highlighting** via Shiki loaded as an ES module
+  (zero runtime, modest grammar bundle). No VitePress.
+- **`examples/recipes/`** — top-level page aggregating every
+  annotated snippet across demos into a flat searchable list.
+  "All the ready-to-paste snippets in one place."
+- Initial scope: annotate demos **03 (physics)**, **07 (image
+  terrain)**, **09 (falling sand)** — the highest-traffic
+  recipes. Other demos picked up incrementally.
+
+---
 
 ---
 
