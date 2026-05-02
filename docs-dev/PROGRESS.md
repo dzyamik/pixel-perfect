@@ -2,7 +2,7 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-02, v3.1.5 reverted v3.1.4 (didn't address pile)
+> Last updated: 2026-05-02, v3.1.6 shipped (multi-pass lateral on burst)
 
 ---
 
@@ -53,9 +53,68 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v3.1.3 — narrow-column criterion (pile + drain fix) | ✅ done | `v3.1.3` |
 | v3.1.4 — bump MAX_COMPRESS 0.02 → 0.5 (faster cascade) | ⚠️ reverted in v3.1.5 | `v3.1.4` |
 | v3.1.5 — revert v3.1.4; pile + slow drain are intrinsic | ✅ done | `v3.1.5` |
+| v3.1.6 — multi-pass lateral on burst over-mass (pile fix) | ✅ done | `v3.1.6` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 
 Test suite: 373 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.6 — multi-pass lateral on burst over-mass (2026-05-02)
+
+User picked option 3 from the v3.1.5 workaround menu: run step 2
+(lateral equalize) multiple times when a cell arrives with `remaining
+> MAX_MASS`, before falling through to step 4 (compression overflow
+up — which produces the visible vertical pile).
+
+### Mechanism
+
+Brush paints typically inject 5–20 cells of mass 1.0 in a single
+tick. Stacked on top of a saturated pool, this puts mass far above
+local capacity. A single lateral-equalize pass with reach=25 and
+equalize=0.5 disposes ~99% of the AVAILABLE diff this tick — but
+the diff is bounded by neighbor masses, which haven't yet absorbed
+the burst. Whatever excess remains triggers compression-up at the
+end of the tick. The cell directly above gains mass and shows as
+a "pile" in subsequent ticks.
+
+The fix: for over-mass source cells (`remaining > MAX_MASS`), run
+the lateral scan up to `LATERAL_BURST_PASSES = 3` times. Each
+repeat re-uses the latest neighbor masses, so successive passes
+keep draining excess across an ever-wider footprint. By the third
+pass the over-mass remainder is below MAX_MASS for typical burst
+sizes; step 4 doesn't fire; no pile.
+
+Settled cells (`remaining ≤ MAX_MASS`) take the single-pass path
+unchanged. No perf hit on the steady state.
+
+### Bench (vs v3.1.5 baseline)
+
+| scenario | v3.1.5 | v3.1.6 |
+|---|---|---|
+| settled (active set empty) | ~1 ms | ~0.6 ms |
+| 100 falling cells | ~9.6 ms | ~5.2 ms |
+| 5000-cell drain | ~84 ms | ~42 ms |
+| 25000-cell drain | ~40 ms | ~25 ms |
+| 12000 thin sheet | ~149 ms | ~96 ms |
+| 32k mixed | ~887 ms | ~487 ms |
+
+Surprising: every scenario got faster, not slower. The reason —
+without the multi-pass, burst over-mass propagates to step 4
+(compression up), which marks the cell above active. That cell's
+next-tick step then ALSO has over-mass (it received compression
+overflow), spawning more upward overflow. The active set stays
+populated for many ticks. With multi-pass disposing burst mass
+laterally in one tick, the chain doesn't start; cells settle and
+drop out of the active set quickly.
+
+### Files
+
+- `src/core/algorithms/CellularAutomaton.ts` — wrapped step 2
+  in a `for (pass)` loop conditional on `remaining > MAX_MASS`,
+  added `LATERAL_BURST_PASSES = 3` constant.
+
+Tests: 375 passing. Typecheck and lint clean.
 
 ---
 
