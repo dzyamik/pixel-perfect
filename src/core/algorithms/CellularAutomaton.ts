@@ -211,23 +211,19 @@ const RANK_SAND = 5;
 const MAX_MASS = 1.0;
 /**
  * Extra mass a bottom-of-stack cell can hold before overflowing
- * upward. The implicit pressure model — taller stacks accumulate
- * proportionally more compression at the base, which the lateral
- * and upward equalization rules then redistribute.
+ * upward. W-Shadow's default; tunable.
  *
- * v3.1.4: bumped from W-Shadow's default `0.02` to `0.5`. The
- * downward `stableSplit` flow rate between two saturated cells
- * is `(total + MAX_COMPRESS) / 2 - MAX_MASS` ≈ `MAX_COMPRESS / 2`
- * per tick — so a saturated stream cascades at compression-rate
- * per stage. With `0.02` the cascade is slow enough that source
- * pools visually never drain and mass piles up at stream landing
- * points faster than it can spread laterally. `0.5` gives ~25×
- * faster cascade. Settled pools still render binary so the
- * deeper compressed mass is visually invisible; the only knob
- * this turns up is "how aggressively does mass move through a
- * stack."
+ * History:
+ * - v3.1.4 bumped to `0.5` to speed cascade through saturated
+ *   streams (cascade rate ≈ `MAX_COMPRESS / 2` per stage / tick).
+ * - v3.1.5 reverted to `0.02`: the speed-up didn't address the
+ *   user-reported "pile at landing" symptom because cascade rate
+ *   AND per-cell holding capacity scale together, so the
+ *   over-mass-per-tick remainder (which is what triggers
+ *   compression overflow up — the visible pile) is roughly
+ *   invariant in `MAX_COMPRESS`.
  */
-const MAX_COMPRESS = 0.5;
+const MAX_COMPRESS = 0.02;
 /** Below this mass a cell is considered empty and reverts to air. */
 const MIN_MASS = 0.0001;
 /**

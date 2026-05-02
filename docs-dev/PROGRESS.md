@@ -2,7 +2,7 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-02, v3.1.4 shipped (MAX_COMPRESS 0.02 → 0.5)
+> Last updated: 2026-05-02, v3.1.5 reverted v3.1.4 (didn't address pile)
 
 ---
 
@@ -51,10 +51,68 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v3.1.1 — bump LATERAL_REACH 5 → 25 (25× gravity flatten speed) | ✅ done | `v3.1.1` |
 | v3.1.2 — fall columns transparent to lateral flow | ✅ done | `v3.1.2` |
 | v3.1.3 — narrow-column criterion (pile + drain fix) | ✅ done | `v3.1.3` |
-| v3.1.4 — bump MAX_COMPRESS 0.02 → 0.5 (faster cascade) | ✅ done | `v3.1.4` |
+| v3.1.4 — bump MAX_COMPRESS 0.02 → 0.5 (faster cascade) | ⚠️ reverted in v3.1.5 | `v3.1.4` |
+| v3.1.5 — revert v3.1.4; pile + slow drain are intrinsic | ✅ done | `v3.1.5` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 
 Test suite: 373 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.5 — revert v3.1.4; pile + slow drain intrinsic to mass-based CA (2026-05-02)
+
+User-reported after v3.1.4 (MAX_COMPRESS bumped 0.02 → 0.5): the
+pile and never-depletes symptoms persisted. Specifically, "the
+piling appears when we pour water near or on the water flow from
+the cliff — maybe the issue is in there, it gives a start for
+water piling near the flow."
+
+### Why MAX_COMPRESS didn't help
+
+The cascade rate through saturated cells `≈ MAX_COMPRESS / 2` per
+tick per stage, AND the per-cell holding capacity `≈ MAX_MASS +
+MAX_COMPRESS`. Both scale together. When a cell over-fills above
+its capacity, the excess triggers compression-overflow-up (the
+visible "pile"). The over-mass-per-tick remainder is roughly
+INVARIANT in `MAX_COMPRESS` — faster arrival is offset by larger
+hold buffer.
+
+### Where the pile actually comes from
+
+Brush paints cells at `mass = 1.0` instantly, often 5–20+ cells
+per click. Lateral equalize disposes `~0.5 × diff` per neighbor
+per tick. With reach=25 the lateral capacity is `~0.99 × diff`
+per tick, but only the diff present at that tick. A burst paint
+near a saturated landing puts mass far above local capacity in
+one tick; lateral can't dispose all of it before the next tick's
+compression-up step fires.
+
+This is a **transient** that persists when paint is continuous
+(user dragging the brush) and is fundamental to mass-based
+cellular automata: discrete per-tick lateral disposal can't
+absorb a sudden mass injection without compression overflow up.
+Real-fluid sims handle this via per-particle velocity / SPH /
+PIC-FLIP, not per-cell mass.
+
+### Workarounds (not implemented — need user choice)
+
+- **Lower brush mass.** `setPixel` could seed mass to 0.5 instead
+  of 1.0. Halves the per-paint mass injection. Cosmetically
+  invisible (binary rendering).
+- **Shrink brush.** Smaller radius = less mass per click.
+- **Multi-pass lateral.** Run step 2 twice or three times per
+  tick. ~2× cost on draining-pour scenarios; absorbs more burst
+  mass before compression-up fires.
+- **Accept intrinsic limitation.** Mass-based sims trade
+  particle realism for cell-grid uniformity; piles are part of
+  the deal.
+
+### Files
+
+- `src/core/algorithms/CellularAutomaton.ts` — `MAX_COMPRESS`
+  reverted from `0.5` to `0.02`.
+
+Tests: 375 passing. Typecheck and lint clean.
 
 ---
 
