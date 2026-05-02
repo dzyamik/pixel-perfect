@@ -472,9 +472,15 @@ This is enough for replay debugging, not enough for lockstep multiplayer.
 Shipped in `v2.0.0` (sand), `v2.1.0` (water + density swap),
 `v2.2.0` (sand-pile settling), `v2.3.0` (oil / gas / fire +
 multi-cell flow), `v2.4.0` (sparse active-cell tracking),
-`v3.0.0` (mass-based liquids), and `v3.1.0` (pool-aware fast
-path). v3 details in `docs-dev/06-v3-mass-based-fluid.md` and
-`docs-dev/07-v3.1-pool-based-fluid.md`.
+`v3.0.0` (mass-based liquids), `v3.1.0` (pool-aware fast path),
+and the `v3.1.x` patch chain ending at `v3.1.16` (cliff drainage
+hydrostatics: pool flood-fill every tick, bottom-up hydrostatic
+distribution, narrow-stream-from-anchored-edge rule, width-from-
+depth Bernoulli discretization, and L/R scan-order ping-pong for
+symmetric drainage). v3 details in
+`docs-dev/06-v3-mass-based-fluid.md`,
+`docs-dev/07-v3.1-pool-based-fluid.md`, and the running ledger in
+`docs-dev/PROGRESS.md`.
 
 `Material.simulation?: SimulationKind` controls how a material
 moves. `'static'` (default for back-compat) generates Box2D
@@ -492,13 +498,29 @@ emerges from over-compression overflow). Cross-material density
 swaps remain atomic — masses are preserved when two cells of
 different materials swap places.
 
-**Pool-aware step (v3.1)** — when the active set exceeds
-`POOL_DETECTION_MIN` cells, the step flood-fills connected
-components of same-material fluid cells, distributes mass uniformly
-within each pool, and skips per-cell `stepLiquid` for cells deep
-in a pool (every 4-neighbor in the same pool). Perimeter cells
-still go through `stepLiquid` so spreading and cross-material swaps
-work normally. 45-62% faster on the largest active sets.
+**Pool-aware step (v3.1)** — every tick (since v3.1.8 the
+threshold is 0), the step flood-fills connected components of
+same-material fluid cells and writes a hydrostatic bottom-up
+mass distribution to each (rows saturated at `MAX_MASS` from
+the bottom up; topmost row carries the remainder). Pool cells
+deep inside a component (every 4-neighbor in the same pool)
+skip per-cell `stepLiquid` entirely. Perimeter cells still go
+through `stepLiquid` so off-pool spreading, cliff drainage, and
+cross-material swaps work normally. The flood-fill + distribute
+is the canonical "instant pool flattening" trick from the
+W-Shadow / Noita / jgallant CA-fluid lineage.
+
+**Cliff drainage rules (v3.1.12-v3.1.16)** — the lateral step
+in `stepLiquid` allows a source cell to donate to "unsupported
+air" (target air whose deep neighbor is also air — the cliff-
+drop column) ONLY when the source has stone / static directly
+below (anchored on the cliff base). Donation distance scales
+with the source's "head" — count of same-material cells
+directly above the source — so a pool 3 rows deep at the
+cliff edge spawns a 3-cell-wide off-cliff stream (Bernoulli
+`width ∝ head`, discretized). Lateral scan direction and
+within-row processing order ping-pong each tick for L/R
+symmetry.
 
 **Active-cell tracking (v2.4)** — `step` iterates a sparse
 `Set<number>` of cell indices on `ChunkedBitmap.activeCells`
