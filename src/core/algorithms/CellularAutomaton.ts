@@ -434,20 +434,17 @@ function stepLiquid(
     // pools where most cells are at equilibrium with their
     // neighbors.
     //
-    // v3.1.11: source-narrow check. If the source has NO same-
-    // material on either lateral side (a "narrow" cell — falling
-    // stream cell, single off-cliff drop, etc.), it doesn't
+    // v3.1.12: anchor check at the donation site. A source with
+    // air or same-material directly below is part of a fluid
+    // column that's not directly anchored on stone — stream cells,
+    // off-cliff drops, sub-surface stream blocks, AND pool TOP-row
+    // cells that sit on a sub-surface row. Such sources don't
     // donate laterally to UNSUPPORTED air (target air with air
-    // below — see check at the donation site). Pool-edge cells
-    // have at least one same-material lateral neighbor (the pool
-    // interior), so they ARE allowed to donate as drainage seeds:
-    // each pool row at the cliff edge spawns one off-cliff column,
-    // producing a falling stream whose width equals the pool's
-    // depth at the edge — matching the user's hydrostatic
-    // intuition.
-    const srcLeftId = x > 0 ? bitmap._readIdUnchecked(x - 1, y) : -1;
-    const srcRightId = x + 1 < W ? bitmap._readIdUnchecked(x + 1, y) : -1;
-    const sourceIsNarrow = srcLeftId !== id && srcRightId !== id;
+    // below). Only sources with stone/static directly below — pool
+    // sub-surface bottom cells, single droplets on a wall — are
+    // allowed to seed an off-cliff column. This produces a single
+    // narrow stream from the pool's bottom edge cell, no parallel
+    // streams from the surface.
     let leftDone = false;
     let rightDone = false;
     for (let d = 1; d <= lateralReach; d++) {
@@ -469,27 +466,25 @@ function stepLiquid(
                 if (sx === -1) leftDone = true; else rightDone = true;
                 continue;
             }
-            // v3.1.11: block lateral donation to UNSUPPORTED air
+            // v3.1.12: block lateral donation to UNSUPPORTED air
             // (target air whose natural-deep neighbor is also air —
-            // the cliff-drop column) WHEN the source is "narrow"
-            // (no same-material lateral neighbors) AND the source
-            // is part of a fluid stream (its own below is air or
-            // same-material). This catches:
-            //   - Falling stream cells (water below) — would leak
-            //     ~0.5 mass to air sides each tick.
+            // the cliff-drop column) WHEN the source's deep
+            // neighbor is air or same-material (i.e. the source is
+            // part of a fluid column NOT directly anchored on
+            // stone). This catches:
+            //   - Pool top-row cells (water below) — without this
+            //     they'd spread off the cliff each tick, then the
+            //     new cell would spread further next tick →
+            //     cascading parallel streams.
+            //   - Falling stream cells (water below).
             //   - Off-cliff cells that just received mass (air
-            //     below) — would propagate the spread along the
-            //     cliff edge into a parallel stream.
+            //     below).
             //
-            // Sources with STONE/static below are allowed to donate
-            // (a single droplet on a wall, draining laterally over
-            // the edge — that's a legitimate cascade, not a leak).
-            // Pool-edge cells have at least one water lateral
-            // neighbor → NOT narrow → also allowed. Each pool row
-            // at the edge donates one off-cliff column → stream
-            // width matches pool depth (matching the user's
-            // hydrostatic intuition for cliff drainage).
-            if (targetId === 0 && sourceIsNarrow) {
+            // Sources with STONE / static directly below ARE
+            // allowed — these are the pool's BOTTOM-row edge cells
+            // (or a single droplet on a wall). They seed the
+            // single narrow stream column off the cliff.
+            if (targetId === 0) {
                 const tny = y + yDir;
                 if (tny >= 0 && tny < H
                     && bitmap._readIdUnchecked(nx, tny) === 0) {
@@ -498,8 +493,6 @@ function stepLiquid(
                         if (sx === -1) leftDone = true; else rightDone = true;
                         continue;
                     }
-                    // Source below is stone/different — allow as
-                    // legitimate cascade off a wall-supported cell.
                 }
             }
             const targetMass = masses[idxNx]!;

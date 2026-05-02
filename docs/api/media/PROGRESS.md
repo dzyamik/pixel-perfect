@@ -2,7 +2,7 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-02, v3.1.11 stream width = pool depth (drainage rule)
+> Last updated: 2026-05-02, v3.1.12 anchor check (stone-below required for off-cliff donation)
 
 ---
 
@@ -58,10 +58,60 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v3.1.8 — always-on pool detection + bottom-up fill (instant flatten) | ✅ done | `v3.1.8` |
 | v3.1.9 — source-narrow-column skips step 2 (stream-side artifact fix) | ✅ done | `v3.1.9` |
 | v3.1.10 — block lateral propagation along cliff edge | ✅ done | `v3.1.10` |
-| v3.1.11 — stream width = pool depth (unified drainage rule) | ✅ done | `v3.1.11` |
+| v3.1.11 — stream width = pool depth (unified drainage rule) | ⚠️ superseded by v3.1.12 | `v3.1.11` |
+| v3.1.12 — anchor check: stone-below required for off-cliff lateral | ✅ done | `v3.1.12` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 
 Test suite: 373 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.12 — anchor check (2026-05-02)
+
+User-reported after v3.1.11: vertical flow still has artifacts.
+
+The bug: v3.1.11's check only fired when source was "narrow" (no
+same-material lateral neighbor). Pool top-row cells have water
+laterally (the pool interior) so they're NOT narrow — and they
+spread off-cliff each tick. The new cell, on the next tick, then
+spreads further. Cascading propagation along the cliff-top
+surface produces multiple parallel streams falling at staggered
+columns: the "horizontal artifacts" symptom.
+
+### Fix
+
+Tighten the rule: drop the `sourceIsNarrow` guard. Now block
+lateral donation to UNSUPPORTED air whenever the source's deep
+neighbor is air or same-material. Equivalently: only sources
+with stone (or different non-air material) directly below are
+allowed to donate to off-cliff air.
+
+The pool's BOTTOM-row edge cell sits directly on stone (the
+cliff body) → allowed. It seeds a single off-cliff column. Pool
+top-row cells sit on the sub-surface row (water below) →
+blocked. Falling stream cells (water below) → blocked. Off-cliff
+cells (air below) → blocked. No cascade.
+
+Result: a single 1-column-wide stream falling from the cliff's
+edge, fed only by the pool's bottom row.
+
+This contradicts the strict "stream width = pool depth"
+interpretation, but matches the user's primary observation
+("vertical flow has artifacts" — they want the stream clean).
+
+### Files
+
+- `src/core/algorithms/CellularAutomaton.ts` — removed v3.1.11's
+  `sourceIsNarrow` calculation; the lateral check now uses only
+  source's deep-neighbor anchor status.
+
+Tests: 375 passing. Typecheck and lint clean.
+
+### Bench (vs v3.1.11)
+
+Comparable. The check is one fewer read per cell since the
+narrow precomputation was removed; the per-target check is
+unchanged.
 
 ---
 
