@@ -380,6 +380,15 @@ function stepLiquid(
         return;
     }
 
+    // v3.1.10: capture source's natural-deep neighbor BEFORE the
+    // vertical step possibly fills it with water. Step 2's lateral
+    // check uses this to detect "source over unsupported air"
+    // (cliff drop column) regardless of any same-tick vertical
+    // donation that turned the cell below into water mid-flight.
+    const srcDeepY = y + yDir;
+    const sourceOverUnsupportedAir = srcDeepY >= 0 && srcDeepY < H
+        && bitmap._readIdUnchecked(x, srcDeepY) === 0;
+
     // 1. Vertical move toward the natural-deep direction.
     const ny = y + yDir;
     if (ny >= 0 && ny < H) {
@@ -472,6 +481,34 @@ function stepLiquid(
             if (targetId !== id && targetId !== 0) {
                 if (sx === -1) leftDone = true; else rightDone = true;
                 continue;
+            }
+            // v3.1.10: block lateral donation to UNSUPPORTED air
+            // (target air whose natural-deep neighbor is also air —
+            // the cliff-drop column) WHEN the source cell is itself
+            // over unsupported air. Reasoning: if the source has
+            // water or stone below, its lateral donation to an
+            // off-cliff air column is a legitimate drainage seed
+            // (the FIRST off-cliff column starts the falling
+            // stream). But a source that's ITSELF over a drop is
+            // already part of the falling stream — its lateral
+            // donation would propagate the stream sideways along
+            // the cliff edge, creating parallel streams that read
+            // as horizontal artifacts.
+            //
+            // Source-side check uses the snapshot taken BEFORE step
+            // 1 — without that, step 1's vertical fall would fill
+            // source's below with water mid-tick, defeating the
+            // unsupported check.
+            if (targetId === 0 && sourceOverUnsupportedAir) {
+                const tny = y + yDir;
+                if (tny >= 0 && tny < H
+                    && bitmap._readIdUnchecked(nx, tny) === 0) {
+                    // Target unsupported AND source unsupported.
+                    // Source is already in the falling-stream
+                    // column; block sideways propagation.
+                    if (sx === -1) leftDone = true; else rightDone = true;
+                    continue;
+                }
             }
             const targetMass = masses[idxNx]!;
             const diff = remaining - targetMass;

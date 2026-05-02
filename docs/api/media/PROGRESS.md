@@ -2,7 +2,7 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-02, v3.1.9 source-narrow-column skips step 2 (no stream lateral leak)
+> Last updated: 2026-05-02, v3.1.10 block lateral propagation along cliff edge
 
 ---
 
@@ -57,9 +57,62 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v3.1.7 — demo 09 brush paints fluids at mass 0.5 (burst-pile fix) | ✅ done | `v3.1.7` |
 | v3.1.8 — always-on pool detection + bottom-up fill (instant flatten) | ✅ done | `v3.1.8` |
 | v3.1.9 — source-narrow-column skips step 2 (stream-side artifact fix) | ✅ done | `v3.1.9` |
+| v3.1.10 — block lateral propagation along cliff edge | ✅ done | `v3.1.10` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 
 Test suite: 373 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.10 — block lateral propagation along cliff edge (2026-05-02)
+
+User-reported after v3.1.9: stream's away-from-cliff side still
+has thin horizontal water artifacts. The narrow-column source
+skip from v3.1.9 caught stream cells (sub-surface, narrow), but
+NOT pool top-row cells at the cliff edge (above is air → narrow
+check fails). Top-row cells were spreading laterally one column
+beyond the cliff each tick, the new cell falling, then ITS top
+cell spreading further — repeated → multiple parallel streams
+reading as horizontal lines.
+
+### Fix
+
+Block lateral donation to unsupported air (target air whose
+deep neighbor is also air — the cliff-drop column) when the
+source cell is also over unsupported air. Source's deep
+neighbor is captured BEFORE step 1's vertical step so the
+mid-tick water deposit doesn't defeat the check.
+
+Reasoning: pool's edge cell with water/stone below ("supported")
+is allowed to donate laterally to an off-cliff air column once
+— the first off-cliff column becomes water, falls, starts the
+stream. But a cell that's ITSELF over a drop ("unsupported") is
+already part of the stream column; its lateral donation would
+propagate the stream sideways, creating the parallel-streams
+artifact.
+
+### Bench (vs v3.1.9)
+
+| scenario | v3.1.9 | v3.1.10 |
+|---|---|---|
+| settled (active set empty) | ~1 ms | ~0.7 ms |
+| 100 falling cells (100 steps) | ~45 ms | ~34 ms |
+| 5000-cell drain | ~70 ms | ~53 ms |
+| 25000-cell drain | ~65 ms | ~41 ms |
+| 12000-cell thin sheet | ~66 ms | ~47 ms |
+| 32k mixed bitmap | ~750 ms | ~587 ms |
+
+Faster across the board — fewer phantom water cells means
+fewer cells in the active set and fewer cell processings per
+tick.
+
+### Files
+
+- `src/core/algorithms/CellularAutomaton.ts` — captured
+  `sourceOverUnsupportedAir` at top of `stepLiquid`, used in
+  step 2's lateral check.
+
+Tests: 375 passing. Typecheck and lint clean.
 
 ---
 
