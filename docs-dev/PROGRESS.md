@@ -2,7 +2,7 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-02, v3.1.12 anchor check (stone-below required for off-cliff donation)
+> Last updated: 2026-05-02, v3.1.13 brush walks fluid down to first supported cell
 
 ---
 
@@ -60,9 +60,52 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v3.1.10 — block lateral propagation along cliff edge | ✅ done | `v3.1.10` |
 | v3.1.11 — stream width = pool depth (unified drainage rule) | ⚠️ superseded by v3.1.12 | `v3.1.11` |
 | v3.1.12 — anchor check: stone-below required for off-cliff lateral | ✅ done | `v3.1.12` |
+| v3.1.13 — brush walks fluid mass down to first supported cell | ✅ done | `v3.1.13` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 
 Test suite: 373 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.13 — brush walks fluid down to first supported cell (2026-05-02)
+
+User-reported after v3.1.12: pool drainage now produces a clean
+single-column stream off the cliff, but pouring water near or
+over the cliff edge creates a falling block whose width equals
+the brush footprint, not the pool's drained stream.
+
+### Mechanism
+
+`spawnBrushAt` paints fluid at every air cell in the brush's
+radius. When some of those cells sit over a cliff drop (air
+below), they're created in mid-air. With v3.1.12's anchor check
+they don't lateral-spread, but they DO fall together as a
+brush-wide block — visually a wide column distinct from the
+pool's narrow drainage stream.
+
+### Fix (demo only)
+
+For fluid brushes, walk each brush cell downward through the air
+column until it finds a supported position (water or static cell
+directly below). Drop the mass there instead of the brush's
+geometric position. The pool / floor below absorbs the painted
+mass directly via `setMass`; mid-air water cells aren't created.
+
+Result: the brush's footprint affects WHERE mass is delivered,
+but the actual falling water comes only from the pool's
+drainage. Stream width is decoupled from brush width and tied to
+pool geometry (single column off the cliff per v3.1.12).
+
+Sand / fire / wood are unaffected — those materials still paint
+at the brush's exact position so users can carve / sculpt.
+
+### Files
+
+- `examples/09-falling-sand/main.ts` — `spawnBrushAt` walks
+  fluid mass down through the air column to the first supported
+  cell.
+
+Tests: 375 passing. Typecheck and lint clean.
 
 ---
 
