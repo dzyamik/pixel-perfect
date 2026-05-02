@@ -2,7 +2,7 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-02, v3.1.10 block lateral propagation along cliff edge
+> Last updated: 2026-05-02, v3.1.11 stream width = pool depth (drainage rule)
 
 ---
 
@@ -58,9 +58,69 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v3.1.8 — always-on pool detection + bottom-up fill (instant flatten) | ✅ done | `v3.1.8` |
 | v3.1.9 — source-narrow-column skips step 2 (stream-side artifact fix) | ✅ done | `v3.1.9` |
 | v3.1.10 — block lateral propagation along cliff edge | ✅ done | `v3.1.10` |
+| v3.1.11 — stream width = pool depth (unified drainage rule) | ✅ done | `v3.1.11` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 
 Test suite: 373 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.11 — stream width = pool depth (2026-05-02)
+
+User-reported after v3.1.10: vertical flow preserves the form of
+the pour (the falling stream is the same shape as the input
+brush) — but they want the cliff drainage to first raise the
+pool's level, then form a falling stream whose width matches the
+pool's depth at the edge.
+
+### Mechanism
+
+Replaced v3.1.9's "narrow column source" check (above-same +
+side-non-same) with a simpler unified rule:
+
+  Block lateral donation to UNSUPPORTED air (target air with air
+  below) WHEN the source is "narrow" (no same-material lateral
+  neighbors) AND the source's deep neighbor is air or same-
+  material. Sources with stone/static below are ALLOWED to
+  donate (a single droplet on a wall, draining laterally over
+  the edge).
+
+This change naturally produces stream-width-equals-pool-depth at
+a cliff edge:
+
+- A pool's TOP-row edge cell has water (pool interior) on one
+  lateral side → NOT narrow → donates to off-cliff air at its
+  own y. ✓
+- A pool's SUB-SURFACE edge cell, same logic → donates to off-
+  cliff air at its own y. ✓
+- An N-row pool spawns N off-cliff cells stacked vertically →
+  the falling stream is N cells wide.
+- Each off-cliff cell, after gaining mass, is itself "narrow"
+  (sides air) and has air below → BLOCKED from further lateral
+  spread. ✓ The stream stays N wide; no parallel-stream
+  artifacts.
+- A falling stream cell mid-cascade has water below → narrow +
+  water-below → BLOCKED → no lateral leak to air sides. ✓
+
+Compared to v3.1.10's check, v3.1.11 catches more cases (stream
+mid-cells, not just first-tick spread) and produces the wider
+stream the user asked for.
+
+### Files
+
+- `src/core/algorithms/CellularAutomaton.ts` — replaced v3.1.9's
+  `sourceInNarrowColumn` (above-same check) with `sourceIsNarrow`
+  (lateral-only check); replaced v3.1.10's `sourceOverUnsupported-
+  Air` capture with inline source-deep check at the donation
+  site.
+
+Tests: 375 passing. Typecheck and lint clean.
+
+### Bench (vs v3.1.10)
+
+Bench numbers basically identical — same overall structure, just
+a more permissive criterion that allows pool sub-surface to drain
+correctly.
 
 ---
 
