@@ -173,24 +173,29 @@ describe('FluidPools.detectPools', () => {
         expect(pool.totalMass).toBeCloseTo(1.0 + 1.0 + 0.4 + 1.0, 3);
     });
 
-    it('distributePoolMass writes uniform mass and conserves total', () => {
+    it('distributePoolMass fills bottom-up and conserves total', () => {
         const bm = buildBitmap([
             'wwww',
             'wwww',
         ]);
-        // Make masses uneven to start.
+        // Make masses uneven to start. Total = 1.0 + 1.0 + 1.0 + 1.0
+        // (row 0) - 0.6 (cell 0 → 0.4) + 1.0*4 (row 1) + 0.5 (cell
+        // (3,1) bumped 1.0 → 1.5) = 7.9 mass total.
         bm.setMass(0, 0, 0.4);
         bm.setMass(3, 1, 1.5);
         const pools = detectPools(bm, bm.materials);
         const pool = [...pools.values()][0]!;
         const initialTotal = pool.totalMass;
         distributePoolMass(bm, pool);
-        // Every pool cell now holds the average.
-        const avg = initialTotal / pool.cells.size;
-        for (const idx of pool.cells) {
-            const y = (idx / bm.width) | 0;
-            const x = idx - y * bm.width;
-            expect(bm.getMass(x, y)).toBeCloseTo(avg);
+        // Bottom row (y = 1) should be fully saturated at MAX_MASS;
+        // top row (y = 0) carries the remainder (initialTotal - 4.0)
+        // distributed uniformly.
+        for (let x = 0; x < 4; x++) {
+            expect(bm.getMass(x, 1)).toBeCloseTo(1.0, 5);
+        }
+        const expectedTopPerCell = (initialTotal - 4.0) / 4;
+        for (let x = 0; x < 4; x++) {
+            expect(bm.getMass(x, 0)).toBeCloseTo(expectedTopPerCell, 5);
         }
         // Total mass conserved.
         let post = 0;

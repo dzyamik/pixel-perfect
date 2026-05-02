@@ -2,7 +2,7 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-02, v3.1.7 demo brush mass 1.0 → 0.5
+> Last updated: 2026-05-02, v3.1.8 always-on pool detection + bottom-up fill
 
 ---
 
@@ -55,9 +55,90 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v3.1.5 — revert v3.1.4; pile + slow drain are intrinsic | ✅ done | `v3.1.5` |
 | v3.1.6 — multi-pass lateral on burst over-mass | ⚠️ reverted (caused horizontal-line artifacts) | `v3.1.6` |
 | v3.1.7 — demo 09 brush paints fluids at mass 0.5 (burst-pile fix) | ✅ done | `v3.1.7` |
+| v3.1.8 — always-on pool detection + bottom-up fill (instant flatten) | ✅ done | `v3.1.8` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 
 Test suite: 373 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.8 — always-on pool detection + bottom-up fill (2026-05-02)
+
+User-reported after v3.1.7: pouring water on one spot still takes
+many ticks to flatten the surface, instead of "almost instantly
+adding the level of water in the same amount that water was added,
+and surface keeps flat."
+
+### Research
+
+Web search across the W-Shadow / jgallant / Noita CA-fluid lineage
+confirmed there is no clever "instant flatten" trick beyond what
+v3.1's pool flood-fill already implements. The standard fix in
+Noita-class engines is:
+
+1. Run flood-fill every tick (not gated to high active counts).
+2. Distribute mass per-pool with a hydrostatic bottom-up profile
+   (not a uniform average across the whole pool).
+3. Optionally lerp the visual surface over 2–4 ticks so the snap
+   reads as "fast" rather than "teleport."
+
+(Sources: W-Shadow's 2009 fluid post + follow-up, jgallant's 2D
+liquid CA in Unity, Petri Purho's Noita GDC 2019 talk, Tom
+Forsyth's CA paper, Zhu/Bridson sand-as-fluid SIGGRAPH 2005.)
+
+### Changes
+
+- **`POOL_DETECTION_MIN`: `10000` → `0`** (`CellularAutomaton.ts`).
+  Pool flood-fill now runs every tick whenever any fluid cell is
+  active. The outer step still short-circuits on a settled world,
+  so the flood-fill cost is paid only when there's flow.
+- **`distributePoolMass` rewritten** (`FluidPools.ts`) to
+  hydrostatic bottom-up fill: rows sorted bottom-first, saturated
+  to `MAX_MASS = 1.0` until the topmost (partial) row holds the
+  remainder. Cells in rows above the new surface are demoted to
+  air. Excess mass beyond row capacity (e.g. compression from
+  burst injection) goes onto the topmost row.
+
+### User-visible effect
+
+Painting water onto an existing pool's surface now merges the
+brush mass into the pool's `totalMass` within one tick, and the
+hydrostatic redistribution raises the surface uniformly across
+the whole connected body. No more "small hill at the brush
+centroid" while reach-25 lateral cascades try to catch up.
+
+### Bench (vs v3.1.7)
+
+| scenario | v3.1.7 | v3.1.8 |
+|---|---|---|
+| settled (active set empty) | ~1 ms | ~1 ms |
+| 100 falling cells (100 steps) | ~5 ms | ~33 ms |
+| 5000-cell drain | ~52 ms | ~53 ms |
+| 25000-cell drain | ~28 ms | ~40 ms |
+| 12000-cell thin sheet | ~96 ms | ~44 ms |
+| 32k mixed bitmap | ~600 ms | ~546 ms |
+
+The 100-cell scenario regressed because pool detection now runs
+on small active sets too. Per-step cost is ~0.33 ms — well within
+real-time budget. Thin sheet got faster (pool fast path now
+actively distributes settled bodies).
+
+The next-most valuable optimization is incremental pool
+maintenance (v3.1 phase 3, deferred): only re-flood pools whose
+chunk dirty-rect was touched this tick. That'd cut the small-
+active-set regression. Not needed for current usability.
+
+### Files
+
+- `src/core/algorithms/CellularAutomaton.ts` — `POOL_DETECTION_MIN`
+  reduced to `0`.
+- `src/core/algorithms/FluidPools.ts` — `distributePoolMass`
+  switched from uniform-avg to bottom-up fill + air demotion +
+  compression-on-top.
+- `tests/core/algorithms/FluidPools.test.ts` — distribute test
+  updated to assert bottom-up profile (was uniform-avg).
+
+Tests: 375 passing. Typecheck and lint clean.
 
 ---
 

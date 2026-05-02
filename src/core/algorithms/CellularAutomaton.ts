@@ -275,21 +275,21 @@ const LATERAL_REACH_HIGH_LOAD_VAL = 5;
 
 /**
  * Minimum active-set size that triggers v3.1 pool detection.
- * Below this, the per-cell `stepLiquid` path is fast enough
- * that the O(W×H) flood-fill scan would cost more than it
- * saves. At `≥ POOL_DETECTION_MIN` active cells the per-tick
- * pool detection overhead is offset by skipping ~80% of the
- * cells that would otherwise call `stepLiquid` (interior cells
- * of large pools).
  *
- * Tuned empirically (`tests/perf/CellularAutomaton.bench.ts`).
- * Below ~10 K active cells the per-cell path wins; above, pool-skip
- * wins. v3.1.1 confirmed this even with the bumped lateral reach —
- * dropping the threshold to 2 K to amortize the larger reach turned
- * out to lose on draining-pour scenarios where cells aren't in
- * stable pools yet.
+ * v3.1.8 dropped from `10000` to `0`: pool flood-fill now runs every
+ * tick whenever there are active fluid cells. This is the canonical
+ * "instant pool flattening" fix in the W-Shadow / jgallant / Noita
+ * CA-fluid lineage — `distributePoolMass` averages mass uniformly
+ * across each connected component, so a brush burst that lands on
+ * top of an existing pool merges and equalizes within one tick
+ * instead of cascading through reach-25 lateral over many ticks.
+ *
+ * The cost is bounded: `detectPools` is O(W × H) per tick (~32 K
+ * reads on a 256×128 bitmap, ~0.3 ms). For a settled world the
+ * outer step short-circuits before pool detection runs, so the
+ * cost is paid only when the active set is non-empty.
  */
-const POOL_DETECTION_MIN = 10000;
+const POOL_DETECTION_MIN = 0;
 /**
  * Minimum pool size that gets the equilibrium mass distribution
  * pass. Smaller pools (singletons, 2-3 cell drops) keep using

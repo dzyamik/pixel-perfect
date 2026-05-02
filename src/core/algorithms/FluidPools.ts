@@ -94,28 +94,97 @@ export function isPoolInterior(
 }
 
 /**
- * Applies a uniform-mass distribution to every cell in the
- * pool. Each cell ends with `pool.totalMass / pool.cells.size`
- * mass, preserving total mass exactly. The bitmap's mass array
- * is written directly (sim hot path).
+ * Distributes the pool's total mass across its cells in a
+ * hydrostatic bottom-up fill: bottom rows are saturated to
+ * `MAX_POOL_MASS_PER_CELL` first, then upward, with the topmost
+ * row possibly partially filled with the remainder. Within a
+ * row, mass is uniform.
  *
- * For sinking fluids on flat floors this matches the
- * stable-split outcome exactly. For tall pools / U-shapes it
- * loses the small per-row compression gradient, but cells are
- * rendered binary (id-based) anyway so no visual difference.
+ * This is the canonical "instant pool flattening" pass in CA
+ * fluid sims (W-Shadow / jgallant / Noita lineage): a brush
+ * burst that lands on top of a connected pool merges and the
+ * pool's surface rises by `mass_added / footprint_width` —
+ * matching real-water hydrostatics — within one tick instead of
+ * cascading via reach-25 lateral over many ticks.
  *
- * Caller is responsible for dirtying chunks (or for letting
- * per-cell `stepLiquid` mark them on perimeter flow).
+ * Cells in rows ABOVE the new surface (no mass left after the
+ * fill) are demoted to air (mass = 0, id = 0) — otherwise they'd
+ * sit at id = fluid with mass = 0, blocking pool re-detection
+ * next tick.
+ *
+ * Caller is responsible for `pool.totalMass` being current
+ * (i.e. having just rebuilt the pool via `detectPools`).
  */
 export function distributePoolMass(bitmap: ChunkedBitmap, pool: FluidPool): void {
-    const cellCount = pool.cells.size;
-    if (cellCount === 0) return;
-    const avg = pool.totalMass / cellCount;
-    const masses = bitmap._getMassArrayUnchecked();
+    if (pool.cells.size === 0) return;
+    const W = bitmap.width;
+
+    // Group cells by y, then sort y values descending (bottom first).
+    const cellsByY = new Map<number, number[]>();
     for (const idx of pool.cells) {
-        masses[idx] = avg;
+        const y = (idx / W) | 0;
+        let row = cellsByY.get(y);
+        if (row === undefined) {
+            row = [];
+            cellsByY.set(y, row);
+        }
+        row.push(idx);
+    }
+    const ys = [...cellsByY.keys()].sort((a, b) => b - a);
+
+    let remainingMass = pool.totalMass;
+    const masses = bitmap._getMassArrayUnchecked();
+
+    for (const y of ys) {
+        const rowCells = cellsByY.get(y)!;
+        const rowCellCount = rowCells.length;
+        const rowCapacity = rowCellCount * MAX_POOL_MASS_PER_CELL;
+
+        if (remainingMass >= rowCapacity) {
+            // Row fully saturated.
+            for (const idx of rowCells) masses[idx] = MAX_POOL_MASS_PER_CELL;
+            remainingMass -= rowCapacity;
+        } else if (remainingMass > 0) {
+            // Top of fill: row partially filled, uniform within row.
+            const perCell = remainingMass / rowCellCount;
+            for (const idx of rowCells) masses[idx] = perCell;
+            remainingMass = 0;
+        } else {
+            // Above the new surface — demote to air. Without this,
+            // cells would keep id = fluid with mass = 0, and next
+            // tick's `detectPools` would re-include them.
+            for (const idx of rowCells) {
+                masses[idx] = 0;
+                const cy = (idx / W) | 0;
+                const cx = idx - cy * W;
+                bitmap._writeIdUnchecked(cx, cy, 0);
+                bitmap._markCellChanged(cx, cy, true);
+            }
+        }
+    }
+
+    // Mass conservation: if every row was saturated and there's
+    // still mass left over, distribute the excess as uniform
+    // compression on the topmost row (so the pool can hold it
+    // without losing mass). Cells render binary so the visible
+    // surface is unchanged.
+    if (remainingMass > 0 && ys.length > 0) {
+        const topY = ys[ys.length - 1]!;
+        const topCells = cellsByY.get(topY)!;
+        const bonusPerCell = remainingMass / topCells.length;
+        for (const idx of topCells) masses[idx] = masses[idx]! + bonusPerCell;
     }
 }
+
+/**
+ * Mass each cell holds when its row is fully saturated by
+ * `distributePoolMass`. Equal to `MAX_MASS = 1.0`. Compression
+ * (`mass > MAX_MASS`) is intentionally not modeled by the pool
+ * fast path — rendering is binary so the visible surface is the
+ * top of the topmost cell that holds any mass, regardless of
+ * compressed depth below.
+ */
+const MAX_POOL_MASS_PER_CELL = 1.0;
 
 /**
  * Full rebuild of the pool registry from the current bitmap.
