@@ -2,7 +2,7 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-01, v3.1.2 shipped (fall-column transparency)
+> Last updated: 2026-05-02, v3.1.3 shipped (narrow-column criterion)
 
 ---
 
@@ -50,9 +50,72 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v3.1.0 — pool-based fluid simulation (phase 1+2) | ✅ done | `v3.1.0` |
 | v3.1.1 — bump LATERAL_REACH 5 → 25 (25× gravity flatten speed) | ✅ done | `v3.1.1` |
 | v3.1.2 — fall columns transparent to lateral flow | ✅ done | `v3.1.2` |
+| v3.1.3 — narrow-column criterion (pile + drain fix) | ✅ done | `v3.1.3` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 
 Test suite: 373 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.3 — narrow-column criterion (2026-05-02)
+
+User-reported after v3.1.2:
+1. "the flow from the cliff could create 'a pile of water' — water
+   from down the cliff trying to be collected around the falling
+   water making a pile."
+2. "water from the cliff never run out — it just stays on a cliff
+   like it is infinite or not moving."
+
+Both came from v3.1.2's column-detection criterion being too broad
+— `same-material above` matched not just falling streams but ALSO
+sub-surface pool cells (which also have water above them). Sub-
+surface cells therefore skipped lateral equalization, breaking
+mass redistribution within wide pools. Visible as:
+
+- Mass piling up at a stream's landing point because the
+  surrounding pool can't redistribute mass laterally fast enough.
+- Source pool failing to drain because its sub-surface mass
+  couldn't equalize and feed the cliff edge.
+
+### Fix
+
+Tighten the column criterion to require BOTH same-material above
+AND at least one lateral side being non-same-material:
+
+```
+isNarrowColumn = targetId === id
+    && getPixel(nx, y - 1) === id          // fed from above
+    && (getPixel(nx - 1, y) !== id          // air on at least
+        || getPixel(nx + 1, y) !== id);     // one side
+```
+
+A 1–2 cell wide stream column has air on at least one side; a
+sub-surface pool middle has same-material on both sides. Sub-
+surface pool middles now equalize laterally as expected.
+
+### Bench (vs v3.1.2)
+
+| scenario | v3.1.2 | v3.1.3 |
+|---|---|---|
+| settled (active set empty) | ~1 ms | ~1 ms |
+| 100 falling cells | ~6.3 ms | ~7.5 ms |
+| 5000-cell draining pour | ~41 ms | ~57 ms |
+| 25000-cell draining pour | ~25 ms | ~33 ms |
+| 12000-cell thin sheet | ~96 ms | ~125 ms |
+| 32k mixed bitmap | ~670 ms | ~668 ms |
+
+Modest perf regression — the narrow check adds 2 extra reads per
+same-material lateral target. The trade-off was the right call:
+v3.1.2's broad criterion produced visibly wrong pool dynamics
+in the demo.
+
+### Files
+
+- `src/core/algorithms/CellularAutomaton.ts` — single criterion
+  `isNarrowColumn` replaces v3.1.2's `isColumnCell` in all three
+  lateral-loop branches.
+
+Test suite: 375 tests passing. Lint clean. Typecheck clean.
 
 ---
 
