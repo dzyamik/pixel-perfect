@@ -2,7 +2,7 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-02, v3.1.3 shipped (narrow-column criterion)
+> Last updated: 2026-05-02, v3.1.4 shipped (MAX_COMPRESS 0.02 → 0.5)
 
 ---
 
@@ -51,9 +51,66 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v3.1.1 — bump LATERAL_REACH 5 → 25 (25× gravity flatten speed) | ✅ done | `v3.1.1` |
 | v3.1.2 — fall columns transparent to lateral flow | ✅ done | `v3.1.2` |
 | v3.1.3 — narrow-column criterion (pile + drain fix) | ✅ done | `v3.1.3` |
+| v3.1.4 — bump MAX_COMPRESS 0.02 → 0.5 (faster cascade) | ✅ done | `v3.1.4` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 
 Test suite: 373 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.4 — faster vertical cascade (2026-05-02)
+
+User-reported after v3.1.3: the "pile of water around falling
+water" and "water on cliff never runs out" symptoms persisted —
+the narrow-column criterion fix didn't address them.
+
+Both turned out to be a different root cause: the **rate** of
+mass cascade through a saturated stream column. Between two cells
+both at `MAX_MASS`, `stableSplit` returns the bottom equilibrium
+≈ `MAX_MASS + MAX_COMPRESS / 2`, so the per-tick downward flow
+is roughly `MAX_COMPRESS / 2`. With W-Shadow's default
+`MAX_COMPRESS = 0.02`, that's **0.01 mass/tick per stage** of a
+saturated stream — a 10-cell-tall stream takes ~50 ticks to move
+one full cell of mass from top to bottom. The user perceived this
+as "infinite source" and "pile at landing because spread can't
+keep up."
+
+### Fix
+
+Bump `MAX_COMPRESS` from `0.02` to `0.5`. Cascade rate becomes
+`~0.25 mass/tick` per stage — 25× faster. Source pool drains
+visibly; landings disperse instead of stacking.
+
+Side effects:
+
+- A settled tower of `N` cells holds compressed mass `MAX_MASS +
+  (N-1) × MAX_COMPRESS` at the bottom, which scales like 5×
+  more compression per row. Rendering is binary so this is
+  visually invisible.
+- The overflow-up threshold (`remaining > MAX_MASS`) is unchanged,
+  so the upward overflow rule still fires at exactly the same
+  mass.
+
+### Bench (vs v3.1.3)
+
+| scenario | v3.1.3 | v3.1.4 |
+|---|---|---|
+| settled | ~1 ms | ~1 ms |
+| 100 falling cells | ~7.5 ms | ~6.9 ms |
+| 5000-cell draining pour | ~57 ms | ~48 ms |
+| 25000-cell draining pour | ~33 ms | ~27 ms |
+| 12000-cell thin sheet | ~125 ms | ~97 ms |
+| 32k mixed bitmap | ~668 ms | ~620 ms |
+
+All scenarios got faster — quicker cascade settles cells sooner
+so they drop out of the active set in fewer ticks.
+
+### Files
+
+- `src/core/algorithms/CellularAutomaton.ts` — single constant
+  bump.
+
+Tests: 375 passing. Typecheck and lint clean.
 
 ---
 
