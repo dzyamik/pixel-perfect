@@ -2,7 +2,7 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-02, v3.1.8 always-on pool detection + bottom-up fill
+> Last updated: 2026-05-02, v3.1.9 source-narrow-column skips step 2 (no stream lateral leak)
 
 ---
 
@@ -56,9 +56,75 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v3.1.6 — multi-pass lateral on burst over-mass | ⚠️ reverted (caused horizontal-line artifacts) | `v3.1.6` |
 | v3.1.7 — demo 09 brush paints fluids at mass 0.5 (burst-pile fix) | ✅ done | `v3.1.7` |
 | v3.1.8 — always-on pool detection + bottom-up fill (instant flatten) | ✅ done | `v3.1.8` |
+| v3.1.9 — source-narrow-column skips step 2 (stream-side artifact fix) | ✅ done | `v3.1.9` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 
 Test suite: 373 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.9 — source-narrow-column skips step 2 (2026-05-02)
+
+User-reported after v3.1.8: surface and pool-level logic now feel
+correct, but on the side AWAY from the cliff there are thin
+horizontal water artifacts.
+
+### Mechanism
+
+With v3.1.8's always-on pool fast path, the pool + falling stream
++ floor pool are detected as ONE connected component. `distribute-
+PoolMass` saturates each stream cell to mass 1.0. Then the outer
+loop processes each stream cell via `stepLiquid`:
+
+1. **Step 1 vertical**: target below is the next stream cell at
+   mass 1.0. `stableSplit(2.0)` returns 1.0098 — flow = 0.0098.
+   So vertical donates a tiny amount to below; remaining ≈ 0.99.
+2. **Step 2 lateral**: source has 0.99 mass; lateral neighbors
+   are air on the away-from-cliff side (stone on the cliff side).
+   `diff = 0.99`, flow = 0.495. Donates 0.495 to the air cell.
+3. The donated mass forms a "phantom" water cell alongside the
+   stream which then falls on its own → thin horizontal wisps
+   visible to the user.
+
+### Fix
+
+Compute `sourceInNarrowColumn` at the top of step 2 and pre-set
+`leftDone = rightDone = true` if the source cell is itself a
+narrow column (same-material directly above AND at least one
+lateral side is non-same-material). The lateral loop's outer
+break (`if (leftDone && rightDone) break`) immediately exits;
+no donations happen.
+
+Pool fast path re-saturates the stream cell next tick, so the
+vertical cascade is unaffected. Pool surface cells (air above)
+and sub-surface pool middles (same-material on both sides) don't
+match the narrow-column source criterion → unaffected.
+
+### Bench (vs v3.1.8)
+
+| scenario | v3.1.8 | v3.1.9 |
+|---|---|---|
+| settled (active set empty) | ~1 ms | ~1 ms |
+| 100 falling cells (100 steps) | ~33 ms | ~45 ms |
+| 5000-cell drain | ~53 ms | ~70 ms |
+| 25000-cell drain | ~40 ms | ~65 ms |
+| 12000-cell thin sheet | ~44 ms | ~66 ms |
+| 32k mixed bitmap | ~546 ms | ~750 ms |
+
+Modest perf regression — narrow-column source check adds 2-3
+reads per cell, AND skipping lateral keeps cells slightly out of
+equilibrium (mass keeps oscillating between vertical donation and
+pool re-saturation), so cells stay in the active set longer.
+
+The trade was the right call: the user's primary complaint after
+v3.1.8 was the artifact, not perf.
+
+### Files
+
+- `src/core/algorithms/CellularAutomaton.ts` — `sourceInNarrowColumn`
+  pre-set of `leftDone` / `rightDone` at top of step 2.
+
+Tests: 375 passing. Typecheck and lint clean.
 
 ---
 

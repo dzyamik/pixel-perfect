@@ -433,8 +433,27 @@ function stepLiquid(
     // most of the inner loop — biggest savings come from large
     // pools where most cells are at equilibrium with their
     // neighbors.
-    let leftDone = false;
-    let rightDone = false;
+    //
+    // v3.1.9: skip step 2 entirely when this SOURCE cell is itself
+    // in a narrow vertical column (same-material directly above AND
+    // at least one lateral side is non-same-material). A falling
+    // stream cell in steady state has slightly-less-than-saturated
+    // mass after step 1's compression equalization with the cell
+    // below; without this skip, the leftover ~0.99 mass donates
+    // 50% laterally to the air sides each tick, creating "phantom"
+    // water cells alongside the stream. Pool-fast-path re-saturates
+    // the stream cell next tick, so vertical cascade is unaffected.
+    //
+    // Settled pool surface cells have AIR above → check fails →
+    // normal lateral. Sub-surface pool middles have same-material
+    // on both sides → check fails → normal lateral. Only narrow
+    // (1–2 cell wide) column cells skip.
+    const sourceInNarrowColumn = y > 0
+        && bitmap._readIdUnchecked(x, y - 1) === id
+        && ((x - 1 < 0 || bitmap._readIdUnchecked(x - 1, y) !== id)
+            || (x + 1 >= W || bitmap._readIdUnchecked(x + 1, y) !== id));
+    let leftDone = sourceInNarrowColumn;
+    let rightDone = sourceInNarrowColumn;
     for (let d = 1; d <= lateralReach; d++) {
         if (remaining < MIN_MASS) break;
         if (leftDone && rightDone) break;
