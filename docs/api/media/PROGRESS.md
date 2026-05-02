@@ -2,7 +2,7 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-02, v3.1.5 reverted v3.1.4 (didn't address pile)
+> Last updated: 2026-05-02, v3.1.7 demo brush mass 1.0 → 0.5
 
 ---
 
@@ -53,9 +53,52 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v3.1.3 — narrow-column criterion (pile + drain fix) | ✅ done | `v3.1.3` |
 | v3.1.4 — bump MAX_COMPRESS 0.02 → 0.5 (faster cascade) | ⚠️ reverted in v3.1.5 | `v3.1.4` |
 | v3.1.5 — revert v3.1.4; pile + slow drain are intrinsic | ✅ done | `v3.1.5` |
+| v3.1.6 — multi-pass lateral on burst over-mass | ⚠️ reverted (caused horizontal-line artifacts) | `v3.1.6` |
+| v3.1.7 — demo 09 brush paints fluids at mass 0.5 (burst-pile fix) | ✅ done | `v3.1.7` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 
 Test suite: 373 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.7 — demo 09 brush paints fluids at half mass (2026-05-02)
+
+After v3.1.6's multi-pass lateral was reverted (horizontal-line
+artifacts) the user picked option 2 from the v3.1.5 menu: lower
+the mass injected per brush click rather than try to fix the
+algorithm's response to bursty input.
+
+### Mechanism
+
+Demo 09's `spawnBrushAt` calls `setPixel(x, y, materialId)` for
+each cell in the brush footprint. `setPixel` seeds mass = 1.0 for
+any registered material. A typical brush click paints 5–20 cells,
+so a single click injects 5–20 mass units in one tick. On top of
+a saturated pool that's far above local lateral capacity → the
+excess fires step 4 compression-overflow-up → visible "pile" at
+the brush centroid (which is exactly what the user reported).
+
+### Fix
+
+Localized to the demo. For fluid materials (water / oil / gas)
+`spawnBrushAt` now calls `setMass(x, y, 0.5, materialId)` instead
+of `setPixel`. Mass injected per click halves; lateral spread
+keeps up with the smaller burst; no compression-up cascade.
+
+For non-fluid materials (sand / fire / wood) the brush still uses
+`setPixel` — those materials don't use fractional mass.
+
+The core API contract is unchanged: `setPixel(x, y, water_id)`
+still seeds mass = 1.0. Only the demo's brush behaves
+differently. Tests pass.
+
+### Files
+
+- `examples/09-falling-sand/main.ts` — `spawnBrushAt` checks
+  material's `simulation` kind and routes through `setMass` for
+  fluids.
+
+Tests: 375 passing. Typecheck and lint clean.
 
 ---
 

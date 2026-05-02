@@ -389,9 +389,18 @@ class FallingSandScene extends Phaser.Scene {
     // @desc there. For a sand/water "paint brush" you usually
     // @desc want to spawn only into air, leaving stone walls
     // @desc and existing fluid alone. This walks the brush
-    // @desc footprint and writes per cell via \`bitmap.setPixel\`.
-    // @desc setPixel auto-marks the changed cell + its 8
-    // @desc neighbors active for the next sim tick (v2.4).
+    // @desc footprint and writes per cell.
+    // @desc
+    // @desc Fluid (water / oil / gas) cells are seeded at mass
+    // @desc 0.5 via \`setMass\` rather than the default \`setPixel\`
+    // @desc mass=1.0. A burst of paint at mass 1.0 puts more
+    // @desc mass on top of a saturated pool than one tick of
+    // @desc lateral spread can dispose of, triggering the
+    // @desc compression-overflow-up rule and producing a visible
+    // @desc vertical pile at the brush's centroid. Half-mass
+    // @desc cells render identically (≥ MIN_MASS) but settle
+    // @desc into existing pools without the spike. Sand / fire
+    // @desc / wood are binary so still go through \`setPixel\`.
     private spawnBrushAt(sceneX: number, sceneY: number, materialId: number): void {
         const bm = this.terrain.bitmap;
         const cx = sceneX - this.terrainOriginX;
@@ -402,12 +411,16 @@ class FallingSandScene extends Phaser.Scene {
         const y0 = Math.max(0, Math.floor(cy - r));
         const x1 = Math.min(WIDTH - 1, Math.ceil(cx + r));
         const y1 = Math.min(HEIGHT - 1, Math.ceil(cy + r));
+        const sim = bm.materials.get(materialId)?.simulation;
+        const isFluid = sim === 'water' || sim === 'oil' || sim === 'gas';
         for (let y = y0; y <= y1; y++) {
             for (let x = x0; x <= x1; x++) {
                 const dx = x - cx;
                 const dy = y - cy;
                 if (dx * dx + dy * dy > r2) continue;
-                if (bm.getPixel(x, y) === 0) bm.setPixel(x, y, materialId);
+                if (bm.getPixel(x, y) !== 0) continue;
+                if (isFluid) bm.setMass(x, y, 0.5, materialId);
+                else bm.setPixel(x, y, materialId);
             }
         }
     }
