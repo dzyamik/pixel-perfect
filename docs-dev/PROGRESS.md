@@ -2,7 +2,7 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-02, v3.1.13 brush walks fluid down to first supported cell
+> Last updated: 2026-05-02, v3.1.14 d=1 off-cliff donation + brush visual trail
 
 ---
 
@@ -61,9 +61,57 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v3.1.11 — stream width = pool depth (unified drainage rule) | ⚠️ superseded by v3.1.12 | `v3.1.11` |
 | v3.1.12 — anchor check: stone-below required for off-cliff lateral | ✅ done | `v3.1.12` |
 | v3.1.13 — brush walks fluid mass down to first supported cell | ✅ done | `v3.1.13` |
+| v3.1.14 — d=1 off-cliff donation + brush visual trail | ✅ done | `v3.1.14` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 
 Test suite: 373 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.14 — d=1 off-cliff donation + brush visual trail (2026-05-02)
+
+User-reported after v3.1.13:
+1. The pour from the brush is invisible — mass teleports straight
+   to the floor with no visible falling water.
+2. Stream falling from the cliff looks DIFFERENT on the left vs
+   right side (asymmetric).
+
+### Issue 2: asymmetry
+
+v3.1.12's anchor check allowed off-cliff donation from any
+stone-anchored source — but with `LATERAL_REACH_MAX = 25` and
+`LATERAL_EQUALIZE = 0.5`, a single source donated to ~25 off-
+cliff columns with diminishing mass. That created a "spray" of
+parallel streams. The lateral scan order (s=0 left, s=1 right)
+plus the per-row processing order (highest-x first) made the
+spray timing differ between left- and right-cliff scenarios.
+
+Fix: limit off-cliff donation to `d = 1` only — the immediate
+adjacent off-cliff column. A stone-anchored pool-edge cell still
+seeds drainage, but the seed is exactly one column wide and
+symmetric.
+
+### Issue 1: invisible pour
+
+v3.1.13's brush walked all fluid mass to the first supported
+cell, which made the pour look instantaneous (no falling water
+visible).
+
+Fix: in addition to depositing the bulk (mass = 0.5) at the
+walked-down position, leave a small visual cell (mass = 0.1) at
+the brush's geometric position. The visual cell cascades down
+through subsequent ticks via the normal vertical step, providing
+the pour-in-flight feedback. With v3.1.12's anchor check the
+visual cell doesn't leak laterally.
+
+### Files
+
+- `src/core/algorithms/CellularAutomaton.ts` — added `d > 1`
+  clause to the off-cliff donation block.
+- `examples/09-falling-sand/main.ts` — `spawnBrushAt` now also
+  drops a visual trail cell at the brush's geometric position.
+
+Tests: 375 passing. Typecheck and lint clean.
 
 ---
 

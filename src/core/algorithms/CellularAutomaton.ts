@@ -466,30 +466,30 @@ function stepLiquid(
                 if (sx === -1) leftDone = true; else rightDone = true;
                 continue;
             }
-            // v3.1.12: block lateral donation to UNSUPPORTED air
-            // (target air whose natural-deep neighbor is also air —
-            // the cliff-drop column) WHEN the source's deep
-            // neighbor is air or same-material (i.e. the source is
-            // part of a fluid column NOT directly anchored on
-            // stone). This catches:
-            //   - Pool top-row cells (water below) — without this
-            //     they'd spread off the cliff each tick, then the
-            //     new cell would spread further next tick →
-            //     cascading parallel streams.
-            //   - Falling stream cells (water below).
-            //   - Off-cliff cells that just received mass (air
-            //     below).
-            //
-            // Sources with STONE / static directly below ARE
-            // allowed — these are the pool's BOTTOM-row edge cells
-            // (or a single droplet on a wall). They seed the
-            // single narrow stream column off the cliff.
+            // v3.1.12 (refined v3.1.14): block lateral donation to
+            // UNSUPPORTED air (target air whose natural-deep
+            // neighbor is also air — the cliff-drop column) when
+            // either:
+            //   (a) source's deep neighbor is air or same-material
+            //       (source is part of a fluid column NOT directly
+            //       anchored on stone — pool top-row, mid-stream
+            //       cells, off-cliff cells), OR
+            //   (b) `d > 1` even with a stone-anchored source —
+            //       a stone-supported pool-edge cell IS allowed to
+            //       donate to the immediately adjacent off-cliff
+            //       column (the drainage seed) but NOT to further
+            //       columns past it. Without (b), the lateral scan
+            //       at reach=25 turns one drainage seed into 25
+            //       parallel streams of decreasing mass; with (b)
+            //       the stream is exactly one column wide and
+            //       symmetric between left- and right-cliff
+            //       scenarios.
             if (targetId === 0) {
                 const tny = y + yDir;
                 if (tny >= 0 && tny < H
                     && bitmap._readIdUnchecked(nx, tny) === 0) {
                     const srcBelow = bitmap._readIdUnchecked(x, tny);
-                    if (srcBelow === 0 || srcBelow === id) {
+                    if (srcBelow === 0 || srcBelow === id || d > 1) {
                         if (sx === -1) leftDone = true; else rightDone = true;
                         continue;
                     }

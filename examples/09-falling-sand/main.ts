@@ -419,21 +419,25 @@ class FallingSandScene extends Phaser.Scene {
                 const dy = y - cy;
                 if (dx * dx + dy * dy > r2) continue;
                 if (bm.getPixel(x, y) !== 0) continue;
-                // For fluid brushes, skip cells with air directly
-                // below — placing fluid in mid-air over a cliff drop
-                // produces a falling block whose width equals the
-                // brush, not the pool's drained stream. Walking
-                // brush mass downward to the first supported cell
-                // (water or static) keeps the stream's width tied
-                // to the pool's drainage geometry instead of the
-                // brush's footprint.
-                let py = y;
+                // For fluid brushes, walk the brush cell downward
+                // through the air column to the first supported cell
+                // (water or static directly below) and drop most of
+                // the mass there. ALSO leave a small visual mass at
+                // the brush position so the user can see the pour
+                // in flight. The visual cell cascades downward
+                // through subsequent ticks via the normal vertical
+                // step; with v3.1.12's anchor check it doesn't leak
+                // laterally.
                 if (isFluid) {
+                    let py = y;
                     while (py + 1 < HEIGHT && bm.getPixel(x, py + 1) === 0) {
                         py += 1;
                     }
                     if (bm.getPixel(x, py) !== 0) continue;
                     bm.setMass(x, py, 0.5, materialId);
+                    if (py !== y) {
+                        bm.setMass(x, y, 0.1, materialId);
+                    }
                 } else {
                     bm.setPixel(x, y, materialId);
                 }
