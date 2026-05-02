@@ -449,7 +449,24 @@ function stepLiquid(
             }
             const targetMass = masses[idxNx]!;
             const diff = remaining - targetMass;
+            // v3.1.2: same-material cells with same-material directly
+            // above are part of a column being fed from above —
+            // either a falling stream (water pouring off a cliff) or
+            // a sub-surface pool cell. Don't terminate the scan at
+            // these. The pre-v3.1.2 behavior treated a fall column
+            // as a "wall" to horizontal flow at the column's row:
+            // running water either donated mass into the column
+            // (which then drained downward) or terminated the scan,
+            // and never reached air on the other side.
+            //
+            // Settled pool SURFACE cells have air directly above
+            // (that's what makes them surface) — those still
+            // terminate the scan here, preserving the v3.0.3 perf
+            // win for static pools.
+            const isColumnCell = targetId === id && y > 0
+                && bitmap._readIdUnchecked(nx, y - 1) === id;
             if (diff <= 0) {
+                if (isColumnCell) continue;
                 if (sx === -1) leftDone = true; else rightDone = true;
                 continue;
             }
@@ -457,12 +474,18 @@ function stepLiquid(
             if (flow > MAX_FLOW) flow = MAX_FLOW;
             if (flow > remaining) flow = remaining;
             if (flow > MIN_FLOW) {
+                // v3.1.2: column cells (mid-fall stream) are
+                // transparent — don't donate mass into them. The
+                // donated mass would just drain straight down,
+                // intercepting horizontal flow.
+                if (isColumnCell) continue;
                 const wasAir = targetMass === 0;
                 masses[idxNx] = targetMass + flow;
                 if (wasAir) bitmap._writeIdUnchecked(nx, y, id);
                 bitmap._markCellChanged(nx, y, wasAir);
                 remaining -= flow;
             } else {
+                if (isColumnCell) continue;
                 if (sx === -1) leftDone = true; else rightDone = true;
             }
         }

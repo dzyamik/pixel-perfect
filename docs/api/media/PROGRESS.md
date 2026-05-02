@@ -2,7 +2,13 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-01, v2.4 active-cell tracking shipped
+> Last updated: 2026-05-01, v3.1.2 shipped (fall-column transparency)
+
+---
+
+## Open issues
+
+(none — v3.1.2 closed the fall-column-as-wall issue.)
 
 ---
 
@@ -43,9 +49,85 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v3.0.4 — demo 09 per-frame profiling + adaptive LATERAL_REACH | ✅ done | `v3.0.4` |
 | v3.1.0 — pool-based fluid simulation (phase 1+2) | ✅ done | `v3.1.0` |
 | v3.1.1 — bump LATERAL_REACH 5 → 25 (25× gravity flatten speed) | ✅ done | `v3.1.1` |
+| v3.1.2 — fall columns transparent to lateral flow | ✅ done | `v3.1.2` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 
 Test suite: 373 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.2 — fall columns transparent to lateral flow (2026-05-02)
+
+User-reported after v3.1.1: "if water hits the cliff edge (from the
+outer side) it falls vertically (that is ok) and become a wall for
+water that runs below — basically water can't run under the cliff
+because falling water is blocking it."
+
+### Mechanism
+
+Cell at `(x, y)` flowing horizontally with reach=25 used to
+encounter a vertical fall column (water cells stacked at the same
+x, fed from a pool above) and treat it as a barrier:
+
+- If the column cell at `(nx, y)` had **equal or higher mass**
+  than the running cell's remainder, the lateral scan terminated
+  on `diff <= 0` (a v3.0.3 perf-opt that assumed "same-mass
+  neighbor → settled pool → nothing further out is worth
+  scanning").
+- If the column cell had **lower** mass, the running cell
+  donated mass into it. The column then drained that mass down
+  to the next tick — so horizontal flow effectively leaked into
+  the fall column instead of crossing past it.
+
+Either way, air on the far side of the column never received
+flow.
+
+### Fix
+
+In `stepLiquid`'s lateral scan, detect "this target is part of a
+column being fed from above" by checking `bitmap.getPixel(nx, y -
+1) === id`. If so:
+
+- Don't terminate the scan on `diff <= 0` — `continue` instead,
+  so the scan keeps marching outward at `d+1..reach`.
+- Don't donate mass into the cell on `diff > 0` either — the
+  donated mass would just drain through.
+
+Settled pool **surface** cells have air directly above (that's
+what makes them surface), so the column-detection check returns
+false and the v3.0.3 early-termination still fires there. Perf
+on idle pools is unchanged.
+
+### Bench (vs v3.1.1)
+
+| scenario | v3.1.1 | v3.1.2 |
+|---|---|---|
+| settled (active set empty) | ~1 ms | ~1 ms |
+| 100 falling cells | ~6.3 ms | ~6.3 ms |
+| 5000-cell draining pour | ~51 ms | ~41 ms (faster) |
+| 25000-cell draining pour | ~29 ms | ~25 ms (faster) |
+| 12000-cell thin sheet | ~82 ms | ~96 ms (slower) |
+| 32k mixed bitmap | ~620 ms | ~670 ms |
+
+The draining-pour scenarios got faster — scanning past stream
+cells skips redundant equalize bookkeeping for column targets.
+The thin sheet got slower because most lateral neighbors have
+same-material directly above (the layer above is also water), so
+the column-detect skip fires and the scan walks to its full reach
+instead of terminating early.
+
+### Files
+
+- `src/core/algorithms/CellularAutomaton.ts` — column-detect
+  branches in three places inside `stepLiquid`'s lateral loop
+  (`diff <= 0`, post-flow, sub-MIN_FLOW).
+- `tests/core/algorithms/CellularAutomaton.test.ts` — new
+  describe block "fluid past fall column (v3.1.2)" with two
+  tests: propagation past a 2-tall column, and a settled-pool
+  surface that still terminates correctly.
+
+Test suite: 375 tests passing (was 373; +2 regression). Lint
+clean. Typecheck clean.
 
 ---
 

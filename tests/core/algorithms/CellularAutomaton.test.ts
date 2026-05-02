@@ -1511,3 +1511,57 @@ describe('CellularAutomaton.step — mixed-rank stack equilibrium', () => {
         expect(bm.getPixel(0, 5)).toBe(stone.id);
     });
 });
+
+describe('CellularAutomaton.step — fluid past fall column (v3.1.2)', () => {
+    // v3.1.2: a vertical fall column (water pouring off a cliff
+    // edge) used to act as a "wall" for water flowing past at the
+    // column's row. The lateral-equalize scan terminated at the
+    // column cell on `diff <= 0` (column had equal/higher mass
+    // than the running water remainder), so air on the far side
+    // of the column never received flow. The fix detects "this
+    // target is part of a column being fed from above" by
+    // checking the cell directly above and skips past it instead
+    // of terminating the scan.
+    it('lateral flow propagates past a same-material column cell', () => {
+        const W = 20;
+        const H = 8;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [water, stone],
+        });
+        // Floor at row 6 so water at row 5 can't fall; isolates
+        // the lateral-scan behavior.
+        for (let x = 0; x < W; x++) bm.setPixel(x, 6, stone.id);
+        // Running water at row 5, columns 0–4.
+        for (let x = 0; x <= 4; x++) bm.setPixel(x, 5, water.id);
+        // 2-tall column at x=10. The cell at (10,5) has same-
+        // material directly above (10,4), so the v3.1.2
+        // column-detection skip fires.
+        bm.setPixel(10, 4, water.id);
+        bm.setPixel(10, 5, water.id);
+        CellularAutomaton.step(bm, 0);
+        // Air at (11, 5) should now hold water — the lateral
+        // scan from running cells reached past column 10.
+        expect(bm.getPixel(11, 5)).toBe(water.id);
+    });
+
+    it('lateral termination still works at a settled pool surface (no above feed)', () => {
+        // Settled pool surface: cells at row 6 with air above
+        // and stone below. No column-detection skip should fire
+        // (above is air), so the scan terminates on the first
+        // equal-mass neighbor, preserving the v3.0.3 perf opt.
+        const W = 8;
+        const H = 8;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [water, stone],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        for (let x = 0; x < W; x++) bm.setPixel(x, 6, water.id);
+        CellularAutomaton.step(bm, 0);
+        // Pool intact: every cell at row 6 still water.
+        for (let x = 0; x < W; x++) {
+            expect(bm.getPixel(x, 6)).toBe(water.id);
+        }
+    });
+});

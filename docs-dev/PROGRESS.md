@@ -2,73 +2,13 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-01, v3.1.1 shipped (25× lateral reach)
+> Last updated: 2026-05-01, v3.1.2 shipped (fall-column transparency)
 
 ---
 
 ## Open issues
 
-### 🔴 Fluid stops at surfaces — surface acts like a barrier
-
-**Reported:** 2026-05-01, after v3.1.1.
-**Symptom:** when fluid (water / oil / gas) touches a static surface
-(stone, sand, world edge) the fluid behaves as if the surface is a
-barrier that stops further movement, instead of flowing along it.
-Visible in demo 09: water poured against a wall doesn't pool and
-spread the way it should; flow appears to "stick" or "die" at the
-contact line.
-
-**Suspected root causes** (need user reproduction to confirm):
-
-1. **Lateral scan terminates at the FIRST non-fluid cell on each
-   side.** In `stepLiquid` (`src/core/algorithms/CellularAutomaton.ts`,
-   lines ~446-449), when the lateral equalization scan hits a cell
-   that's neither air nor the same fluid, it sets `leftDone` /
-   `rightDone` and stops scanning that side. With `LATERAL_REACH_MAX`
-   now at 25, a thin obstacle at d=2 blocks reach to air at d=3..25
-   on that side — including the gap that the fluid should flow
-   through. Pre-v3.1.1 (reach=5) the symptom was less visible
-   because shorter reach meant fewer obstacles per scan.
-2. **Pool perimeter cells against walls may inherit a "settled"
-   mass from `distributePoolMass` that's below `MAX_MASS`** and
-   therefore never trigger the compression-overflow up-step. When
-   the pool's average mass < 1.0 (an under-filled pool), perimeter
-   cells next to a wall hold less mass than the cell directly
-   above, but the upward overflow only fires when `remaining >
-   MAX_MASS`. Result: vertical column appears flat against the
-   wall instead of building up.
-3. **Wall-blocked fluid doesn't probe diagonals.** A cell with a
-   wall directly below skips step 1 (vertical fall) and goes to
-   step 2 (lateral). It does not try to fall diagonally past the
-   wall edge. In a pour against a wall corner, mass that should
-   round the corner instead piles up at the corner cell.
-
-**Fix candidates** (one or more, in increasing complexity):
-
-- **A — skip-past-obstacle lateral scan:** when the scan hits a
-  static cell at distance `d`, don't immediately mark the side
-  done — keep scanning past it, looking for a same-fluid or air
-  cell at `d+1..reach` that's still reachable through the row
-  above (i.e. fluid can flow over a low wall). Adds an outer
-  height check; small per-tick cost.
-- **B — diagonal fall when vertical-blocked:** in the vertical
-  step, if the cell directly below is static, check `(x ± 1, y +
-  yDir)` for an air target before falling back to lateral. Costs
-  two extra reads per blocked cell; matches expected gravity
-  behavior at cliff edges.
-- **C — drop the early termination entirely:** keep the scan
-  going through static cells, but skip them as flow targets. The
-  scan cost goes from O(reach) → still O(reach) — same complexity,
-  just doesn't cut early. Could regress perf on enclosed-pool
-  scenarios where most lateral neighbors are walls.
-
-**Reproduction:** TBD — user to capture demo 09 paint sequence
-that triggers it. Likely: pour water onto a flat stone shelf
-with a vertical wall at one end; observe flow at the wall edge.
-
-**Next step:** confirm reproduction in demo 09 with profiling
-overlay running, identify which of A/B/C maps to the observed
-behavior, ship as v3.1.2.
+(none — v3.1.2 closed the fall-column-as-wall issue.)
 
 ---
 
@@ -109,9 +49,85 @@ behavior, ship as v3.1.2.
 | v3.0.4 — demo 09 per-frame profiling + adaptive LATERAL_REACH | ✅ done | `v3.0.4` |
 | v3.1.0 — pool-based fluid simulation (phase 1+2) | ✅ done | `v3.1.0` |
 | v3.1.1 — bump LATERAL_REACH 5 → 25 (25× gravity flatten speed) | ✅ done | `v3.1.1` |
+| v3.1.2 — fall columns transparent to lateral flow | ✅ done | `v3.1.2` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 
 Test suite: 373 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.2 — fall columns transparent to lateral flow (2026-05-02)
+
+User-reported after v3.1.1: "if water hits the cliff edge (from the
+outer side) it falls vertically (that is ok) and become a wall for
+water that runs below — basically water can't run under the cliff
+because falling water is blocking it."
+
+### Mechanism
+
+Cell at `(x, y)` flowing horizontally with reach=25 used to
+encounter a vertical fall column (water cells stacked at the same
+x, fed from a pool above) and treat it as a barrier:
+
+- If the column cell at `(nx, y)` had **equal or higher mass**
+  than the running cell's remainder, the lateral scan terminated
+  on `diff <= 0` (a v3.0.3 perf-opt that assumed "same-mass
+  neighbor → settled pool → nothing further out is worth
+  scanning").
+- If the column cell had **lower** mass, the running cell
+  donated mass into it. The column then drained that mass down
+  to the next tick — so horizontal flow effectively leaked into
+  the fall column instead of crossing past it.
+
+Either way, air on the far side of the column never received
+flow.
+
+### Fix
+
+In `stepLiquid`'s lateral scan, detect "this target is part of a
+column being fed from above" by checking `bitmap.getPixel(nx, y -
+1) === id`. If so:
+
+- Don't terminate the scan on `diff <= 0` — `continue` instead,
+  so the scan keeps marching outward at `d+1..reach`.
+- Don't donate mass into the cell on `diff > 0` either — the
+  donated mass would just drain through.
+
+Settled pool **surface** cells have air directly above (that's
+what makes them surface), so the column-detection check returns
+false and the v3.0.3 early-termination still fires there. Perf
+on idle pools is unchanged.
+
+### Bench (vs v3.1.1)
+
+| scenario | v3.1.1 | v3.1.2 |
+|---|---|---|
+| settled (active set empty) | ~1 ms | ~1 ms |
+| 100 falling cells | ~6.3 ms | ~6.3 ms |
+| 5000-cell draining pour | ~51 ms | ~41 ms (faster) |
+| 25000-cell draining pour | ~29 ms | ~25 ms (faster) |
+| 12000-cell thin sheet | ~82 ms | ~96 ms (slower) |
+| 32k mixed bitmap | ~620 ms | ~670 ms |
+
+The draining-pour scenarios got faster — scanning past stream
+cells skips redundant equalize bookkeeping for column targets.
+The thin sheet got slower because most lateral neighbors have
+same-material directly above (the layer above is also water), so
+the column-detect skip fires and the scan walks to its full reach
+instead of terminating early.
+
+### Files
+
+- `src/core/algorithms/CellularAutomaton.ts` — column-detect
+  branches in three places inside `stepLiquid`'s lateral loop
+  (`diff <= 0`, post-flow, sub-MIN_FLOW).
+- `tests/core/algorithms/CellularAutomaton.test.ts` — new
+  describe block "fluid past fall column (v3.1.2)" with two
+  tests: propagation past a 2-tall column, and a settled-pool
+  surface that still terminates correctly.
+
+Test suite: 375 tests passing (was 373; +2 regression). Lint
+clean. Typecheck clean.
 
 ---
 
