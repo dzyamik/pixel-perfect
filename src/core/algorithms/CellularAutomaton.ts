@@ -272,19 +272,6 @@ const LATERAL_REACH_MAX = 25;
  */
 const LATERAL_REACH_HIGH_LOAD = 8000;
 const LATERAL_REACH_HIGH_LOAD_VAL = 5;
-/**
- * v3.1.6: number of times to repeat the lateral-equalize scan
- * for cells that arrive at step 2 with `remaining > MAX_MASS`.
- * A brush-burst injection can drop more mass on a saturated
- * pool than a single reach=25 lateral pass can dispose, so the
- * leftover excess fires step 4 (compression overflow up) and
- * builds a visible pile. Repeating the scan re-uses updated
- * neighbor masses to drain more burst over-mass per tick.
- *
- * Settled pools (`remaining ≤ MAX_MASS`) take a single pass —
- * no perf hit on the steady state.
- */
-const LATERAL_BURST_PASSES = 3;
 
 /**
  * Minimum active-set size that triggers v3.1 pool detection.
@@ -446,72 +433,68 @@ function stepLiquid(
     // most of the inner loop — biggest savings come from large
     // pools where most cells are at equilibrium with their
     // neighbors.
-    //
-    // v3.1.6: when this source cell is over-mass (remaining >
-    // MAX_MASS, e.g. the result of a brush-burst injection
-    // landing on top of a saturated pool), repeat the scan up
-    // to `LATERAL_BURST_PASSES` times before falling through to
-    // step 4. Each repeat re-uses the latest neighbor masses,
-    // so a single tick can dispose burst over-mass that one
-    // pass + reach=25 couldn't quite drain. Settled cells
-    // (`remaining ≤ MAX_MASS`) take the single-pass path —
-    // no perf hit on the steady state.
-    const lateralPasses = remaining > MAX_MASS ? LATERAL_BURST_PASSES : 1;
-    for (let pass = 0; pass < lateralPasses; pass++) {
+    let leftDone = false;
+    let rightDone = false;
+    for (let d = 1; d <= lateralReach; d++) {
         if (remaining < MIN_MASS) break;
-        let leftDone = false;
-        let rightDone = false;
-        for (let d = 1; d <= lateralReach; d++) {
+        if (leftDone && rightDone) break;
+        for (let s = 0; s < 2; s++) {
             if (remaining < MIN_MASS) break;
-            if (leftDone && rightDone) break;
-            for (let s = 0; s < 2; s++) {
-                if (remaining < MIN_MASS) break;
-                const sx = s === 0 ? -1 : 1;
-                if (sx === -1 && leftDone) continue;
-                if (sx === 1 && rightDone) continue;
-                const nx = x + sx * d;
-                if (nx < 0 || nx >= W) {
-                    if (sx === -1) leftDone = true; else rightDone = true;
-                    continue;
-                }
-                const idxNx = y * W + nx;
-                const targetId = bitmap._readIdUnchecked(nx, y);
-                if (targetId !== id && targetId !== 0) {
-                    if (sx === -1) leftDone = true; else rightDone = true;
-                    continue;
-                }
-                const targetMass = masses[idxNx]!;
-                const diff = remaining - targetMass;
-                // v3.1.2 (refined v3.1.3): treat a target as a
-                // mid-fall stream column ONLY when it's in a
-                // narrow vertical column — same-material above
-                // AND at least one lateral side non-same-material.
-                // Distinguishes a 1–2 cell wide falling stream
-                // from a sub-surface pool middle (which has
-                // same-material on both sides).
-                const isNarrowColumn = targetId === id && y > 0
-                    && bitmap._readIdUnchecked(nx, y - 1) === id
-                    && ((nx - 1 < 0 || bitmap._readIdUnchecked(nx - 1, y) !== id)
-                        || (nx + 1 >= W || bitmap._readIdUnchecked(nx + 1, y) !== id));
-                if (diff <= 0) {
-                    if (isNarrowColumn) continue;
-                    if (sx === -1) leftDone = true; else rightDone = true;
-                    continue;
-                }
-                let flow = diff * LATERAL_EQUALIZE;
-                if (flow > MAX_FLOW) flow = MAX_FLOW;
-                if (flow > remaining) flow = remaining;
-                if (flow > MIN_FLOW) {
-                    if (isNarrowColumn) continue;
-                    const wasAir = targetMass === 0;
-                    masses[idxNx] = targetMass + flow;
-                    if (wasAir) bitmap._writeIdUnchecked(nx, y, id);
-                    bitmap._markCellChanged(nx, y, wasAir);
-                    remaining -= flow;
-                } else {
-                    if (isNarrowColumn) continue;
-                    if (sx === -1) leftDone = true; else rightDone = true;
-                }
+            const sx = s === 0 ? -1 : 1;
+            if (sx === -1 && leftDone) continue;
+            if (sx === 1 && rightDone) continue;
+            const nx = x + sx * d;
+            if (nx < 0 || nx >= W) {
+                if (sx === -1) leftDone = true; else rightDone = true;
+                continue;
+            }
+            const idxNx = y * W + nx;
+            const targetId = bitmap._readIdUnchecked(nx, y);
+            if (targetId !== id && targetId !== 0) {
+                if (sx === -1) leftDone = true; else rightDone = true;
+                continue;
+            }
+            const targetMass = masses[idxNx]!;
+            const diff = remaining - targetMass;
+            // v3.1.2 (refined v3.1.3): treat a target as a mid-fall
+            // stream column ONLY when it's in a narrow vertical
+            // column.
+            //
+            // Criterion: same-material directly above AND at least
+            // one lateral side is non-same-material. The narrow
+            // check distinguishes a 1–2 cell wide falling stream
+            // (water pouring off a cliff) from a sub-surface cell of
+            // a wide settled pool. Both have same-material above,
+            // but a sub-surface pool middle has same-material on
+            // both lateral sides; a stream has air (or differing
+            // material) on at least one side.
+            //
+            // Pre-v3.1.3 used same-material-above alone, which made
+            // sub-surface pool cells skip lateral equalization
+            // entirely. Visible as a "pile" of water at a stream's
+            // landing point and as the source pool failing to drain.
+            const isNarrowColumn = targetId === id && y > 0
+                && bitmap._readIdUnchecked(nx, y - 1) === id
+                && ((nx - 1 < 0 || bitmap._readIdUnchecked(nx - 1, y) !== id)
+                    || (nx + 1 >= W || bitmap._readIdUnchecked(nx + 1, y) !== id));
+            if (diff <= 0) {
+                if (isNarrowColumn) continue;
+                if (sx === -1) leftDone = true; else rightDone = true;
+                continue;
+            }
+            let flow = diff * LATERAL_EQUALIZE;
+            if (flow > MAX_FLOW) flow = MAX_FLOW;
+            if (flow > remaining) flow = remaining;
+            if (flow > MIN_FLOW) {
+                if (isNarrowColumn) continue;
+                const wasAir = targetMass === 0;
+                masses[idxNx] = targetMass + flow;
+                if (wasAir) bitmap._writeIdUnchecked(nx, y, id);
+                bitmap._markCellChanged(nx, y, wasAir);
+                remaining -= flow;
+            } else {
+                if (isNarrowColumn) continue;
+                if (sx === -1) leftDone = true; else rightDone = true;
             }
         }
     }
