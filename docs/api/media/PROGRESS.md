@@ -2,7 +2,7 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-02, v3.1.15 width-from-depth + lateral-scan ping-pong + tiny-pool distribution
+> Last updated: 2026-05-02, v3.1.16 within-row x-order ping-pong (left-cliff symmetry)
 
 ---
 
@@ -63,9 +63,66 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v3.1.13 — brush walks fluid mass down to first supported cell | ✅ done | `v3.1.13` |
 | v3.1.14 — d=1 off-cliff donation + brush visual trail | ✅ done | `v3.1.14` |
 | v3.1.15 — width-from-depth + scan-direction ping-pong + POOL_MIN_SIZE=2 | ✅ done | `v3.1.15` |
+| v3.1.16 — within-row x-order ping-pong | ✅ done | `v3.1.16` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 
 Test suite: 373 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.16 — within-row x-order ping-pong (2026-05-02)
+
+User-reported after v3.1.15: most behavior is correct, but
+LEFT-cliff drainage still piles water on the cliff and produces
+a narrower stream than RIGHT-cliff drainage.
+
+### Mechanism
+
+v3.1.15's `sxFlip` ping-pongs the LATERAL scan direction inside
+`stepLiquid`, which makes per-source donation order symmetric.
+But the OUTER loop's processing order is fixed: cells sorted by
+index descending, so within a row, highest x processes first.
+
+For a RIGHT-cliff pool (drainage source has the highest x in the
+row), the source processes FIRST, donates off-cliff, then the
+rest of the row processes and BACK-FILLS the source via lateral
+within the SAME TICK. End-of-tick state has the row's mass
+mostly redistributed.
+
+For a LEFT-cliff pool (drainage source has the LOWEST x in the
+row), the source processes LAST. By then no further cells in
+the row remain to back-fill it within the tick. The source ends
+the tick at very low mass (e.g., 0.125 after a `headCount = 2`
+geometric donation). The pool fast path corrects this on the
+next tick, but the within-tick state is what the renderer
+captures.
+
+The visual asymmetry compounds with the `headCount`-based stream
+width: when the source's mass hasn't been refilled yet,
+subsequent ticks see a smaller "head" and produce a narrower
+stream.
+
+### Fix
+
+Alternate the within-row x-order each tick:
+
+- Even tick: sort cells by index descending (highest x first
+  within row) — back-filling cascade goes RIGHT→LEFT.
+- Odd tick: sort y descending (bottom-up) but x ascending (lowest
+  x first within row) — back-filling cascade goes LEFT→RIGHT.
+
+The ping-pong is paired with the existing `sxFlip` lateral-scan
+direction so both passes (within-row and per-source) alternate.
+Net: left-cliff and right-cliff drainage now see equivalent
+within-tick back-filling on alternate ticks, removing the visual
+asymmetry.
+
+### Files
+
+- `src/core/algorithms/CellularAutomaton.ts` — sort order in the
+  outer step now branches on `tick & 1`.
+
+Tests: 375 passing. Typecheck and lint clean.
 
 ---
 

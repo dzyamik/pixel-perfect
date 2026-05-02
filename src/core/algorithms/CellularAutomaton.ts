@@ -113,7 +113,26 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
     // cell side preference handles directional symmetry independently
     // of x-iteration order.
     const cells = [...active];
-    cells.sort((a, b) => b - a);
+    // v3.1.16: alternate within-row x-order per tick (in addition
+    // to the v3.1.15 lateral-scan ping-pong). Without this, a pool
+    // draining off a RIGHT cliff has its drainage source processed
+    // FIRST in its row (highest x) and then the rest of the row
+    // back-fills it within the same tick via lateral cascades; a
+    // pool draining off a LEFT cliff has its drainage source
+    // processed LAST (lowest x) and gets no within-tick back-fill.
+    // The resulting end-of-tick mass distribution differs between
+    // left and right scenarios. Alternating x-order each tick
+    // averages out the asymmetry.
+    if ((tick & 1) === 0) {
+        cells.sort((a, b) => b - a);
+    } else {
+        cells.sort((a, b) => {
+            const ya = (a / W) | 0;
+            const yb = (b / W) | 0;
+            if (ya !== yb) return yb - ya;
+            return a - b;
+        });
+    }
     active.clear();
 
     // Cells that received fluid via in-row movement this tick. The
