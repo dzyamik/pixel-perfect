@@ -2,7 +2,7 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-02, v3.1.14 d=1 off-cliff donation + brush visual trail
+> Last updated: 2026-05-02, v3.1.15 width-from-depth + lateral-scan ping-pong + tiny-pool distribution
 
 ---
 
@@ -62,9 +62,71 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v3.1.12 — anchor check: stone-below required for off-cliff lateral | ✅ done | `v3.1.12` |
 | v3.1.13 — brush walks fluid mass down to first supported cell | ✅ done | `v3.1.13` |
 | v3.1.14 — d=1 off-cliff donation + brush visual trail | ✅ done | `v3.1.14` |
+| v3.1.15 — width-from-depth + scan-direction ping-pong + POOL_MIN_SIZE=2 | ✅ done | `v3.1.15` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 
 Test suite: 373 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.15 — width-from-depth + scan ping-pong + tiny-pool distribution (2026-05-02)
+
+User-reported after v3.1.14: stream is too narrow on the right-
+cliff side, and on the LEFT-cliff side the pool surface piles
+like sand instead of laying flat. Asked for a comprehensive
+review with proper vessel / surface / volume-transmission rules.
+
+Web research across the W-Shadow / Noita / jgallant / falling-
+sand literature pointed at three known techniques (Tom Forsyth,
+W-Shadow follow-ups, winter.dev, Powder Toy):
+
+1. **Width from pool depth** — there is no published "stream
+   width = depth" rule, but Bernoulli outflow `flow ∝ √head` can
+   be discretized as `width ∝ head` in CA. Allow off-cliff
+   lateral donation up to `d ≤ headCount + 1` where headCount
+   counts same-material cells directly above the source.
+2. **Symmetry fix** — alternate the lateral scan direction every
+   tick (ping-pong). Standard fix for the "left-first" bias from
+   fixed scan order.
+3. **Tiny-pool distribution** — pools below `POOL_MIN_SIZE` skip
+   the hydrostatic distribution and use per-cell stepLiquid,
+   which can produce sand-pile-like uneven surfaces. Lower the
+   threshold so even small pools flatten.
+
+### Changes
+
+- `headCount` counted at the top of step 2 by walking up the
+  source's column for same-material cells. Off-cliff donation
+  rule changes from `d > 1` → `d > headCount + 1`.
+- New `sxFlip = tick & 1` parameter passed to stepLiquid; the
+  inner `s` index is XORed with `sxFlip` so even ticks try left-
+  then-right and odd ticks try right-then-left.
+- `POOL_MIN_SIZE` lowered from 8 to 2. Singletons still skip
+  distribution (nothing to equilibrate).
+
+### Effects
+
+- A pool 3 rows deep at the cliff edge spawns a 3-cell-wide
+  off-cliff stream (the bottom-edge cell with `headCount = 2`
+  donates to d = 1, 2, 3).
+- Left-cliff and right-cliff scenarios now process the lateral
+  scan symmetrically — the cliff's drainage produces a
+  visually-identical stream on either side.
+- Tiny pools (2-7 cells) now get the bottom-up hydrostatic
+  flatten pass instead of falling back to per-cell flow.
+
+### Files
+
+- `src/core/algorithms/CellularAutomaton.ts` — added `sxFlip`
+  parameter to stepLiquid; computed `headCount` and
+  `maxOffCliffD` at top of step 2; replaced `d > 1` with `d >
+  maxOffCliffD`; lowered `POOL_MIN_SIZE`.
+
+Tests: 375 passing. Typecheck and lint clean.
+
+### Bench
+
+Comparable to v3.1.14 (within noise).
 
 ---
 

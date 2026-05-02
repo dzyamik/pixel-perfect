@@ -96,6 +96,12 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
     const W = bitmap.width;
     const H = bitmap.height;
     const goRight = (tick & 1) === 0;
+    // v3.1.15: ping-pong the lateral scan direction every tick to
+    // remove the L→R / R→L bias from the fixed scan order. With
+    // `sxFlip = 0` the scan tries left-then-right (s=0 → -1, s=1
+    // → +1); with `sxFlip = 1` it tries right-then-left. Standard
+    // symmetry-fix from the falling-sand engine literature.
+    const sxFlip = tick & 1;
     const materials = bitmap.materials;
 
     // Snapshot to a sortable array, then clear the live set so the
@@ -177,11 +183,11 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
         if (kind === 'sand') {
             stepSand(bitmap, materials, x, y, id, W, H, goRight, movedThisTick);
         } else if (kind === 'water') {
-            stepLiquid(bitmap, materials, x, y, id, W, H, +1, RANK_WATER, lateralReach);
+            stepLiquid(bitmap, materials, x, y, id, W, H, +1, RANK_WATER, lateralReach, sxFlip);
         } else if (kind === 'oil') {
-            stepLiquid(bitmap, materials, x, y, id, W, H, +1, RANK_OIL, lateralReach);
+            stepLiquid(bitmap, materials, x, y, id, W, H, +1, RANK_OIL, lateralReach, sxFlip);
         } else if (kind === 'gas') {
-            stepLiquid(bitmap, materials, x, y, id, W, H, -1, RANK_GAS, lateralReach);
+            stepLiquid(bitmap, materials, x, y, id, W, H, -1, RANK_GAS, lateralReach, sxFlip);
         } else if (kind === 'fire') {
             stepFire(bitmap, materials, x, y, id, material, W, H, movedThisTick);
         }
@@ -292,11 +298,19 @@ const LATERAL_REACH_HIGH_LOAD_VAL = 5;
 const POOL_DETECTION_MIN = 0;
 /**
  * Minimum pool size that gets the equilibrium mass distribution
- * pass. Smaller pools (singletons, 2-3 cell drops) keep using
- * per-cell flow — the distribution overhead per pool is non-zero
- * and tiny pools don't have an "interior" to save work on.
+ * pass.
+ *
+ * v3.1.15 lowered from `8` to `2`: even small pools (a couple of
+ * cells) need hydrostatic flattening or they read like sand-piles
+ * (per-cell stepLiquid produces uneven surfaces because the
+ * lateral scan can't fully equilibrate within a single tick of
+ * just-merged cells). The distribution pass is cheap: a Map +
+ * sort over a couple of cells is sub-microsecond.
+ *
+ * Singletons (size 1) skip distribution since there's nothing to
+ * equilibrate.
  */
-const POOL_MIN_SIZE = 8;
+const POOL_MIN_SIZE = 2;
 
 /**
  * Given two stacked cells with combined mass `total`, returns
@@ -353,6 +367,7 @@ function stepLiquid(
     yDir: number,
     srcRank: number,
     lateralReach: number,
+    sxFlip: number,
 ): void {
     // v3.0.3 perf: cache the mass array reference and use direct
     // index access. setMass(...) does ~30 lookups + bookkeeping
@@ -445,6 +460,19 @@ function stepLiquid(
     // allowed to seed an off-cliff column. This produces a single
     // narrow stream from the pool's bottom edge cell, no parallel
     // streams from the surface.
+    // v3.1.15: width-from-depth — count contiguous same-material
+    // cells directly above the source. The off-cliff donation rule
+    // allows `d ≤ headCount + 1` so a stone-anchored pool-edge cell
+    // with N cells of water above it spills into N+1 off-cliff
+    // columns. Approximates Bernoulli outflow `width ∝ head` in
+    // discrete cells (capped at `lateralReach` for safety).
+    let headCount = 0;
+    for (let yy = y - 1; yy >= 0; yy--) {
+        if (bitmap._readIdUnchecked(x, yy) !== id) break;
+        headCount += 1;
+        if (headCount >= lateralReach) break;
+    }
+    const maxOffCliffD = headCount + 1;
     let leftDone = false;
     let rightDone = false;
     for (let d = 1; d <= lateralReach; d++) {
@@ -452,7 +480,9 @@ function stepLiquid(
         if (leftDone && rightDone) break;
         for (let s = 0; s < 2; s++) {
             if (remaining < MIN_MASS) break;
-            const sx = s === 0 ? -1 : 1;
+            // v3.1.15: alternate scan direction per tick to remove
+            // the left-first bias.
+            const sx = (s ^ sxFlip) === 0 ? -1 : 1;
             if (sx === -1 && leftDone) continue;
             if (sx === 1 && rightDone) continue;
             const nx = x + sx * d;
@@ -489,7 +519,7 @@ function stepLiquid(
                 if (tny >= 0 && tny < H
                     && bitmap._readIdUnchecked(nx, tny) === 0) {
                     const srcBelow = bitmap._readIdUnchecked(x, tny);
-                    if (srcBelow === 0 || srcBelow === id || d > 1) {
+                    if (srcBelow === 0 || srcBelow === id || d > maxOffCliffD) {
                         if (sx === -1) leftDone = true; else rightDone = true;
                         continue;
                     }
