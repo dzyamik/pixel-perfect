@@ -869,14 +869,34 @@ describe('CellularAutomaton.step — gas', () => {
         expect(renderGridV23(bm)).toEqual(['#', 'g']);
     });
 
-    it('gas at the top row stays put (no row above)', () => {
+    it('gas at the top row stays put when no gas pressure below (v3.1.30)', () => {
+        // v3.1.30: gas at row 0 only escapes when same-gas below
+        // is pushing up. Isolated gas at the ceiling persists.
         const bm = gridBitmapV23(['g....']);
         CellularAutomaton.step(bm, 0);
-        // Top row, no rise possible. Free horizontal cells exist
-        // though — gas spreads sideways via the flow rule.
         const after = renderGridV23(bm);
-        // The 'g' moved into row 0 somewhere; not necessarily at x=0.
         expect(after[0]!.includes('g')).toBe(true);
+    });
+
+    it('gas at the top row escapes when more gas pressures from below (v3.1.30)', () => {
+        // v3.1.30: gas at row 0 with gas at row 1 below is
+        // released to atmosphere — sustained pours don't pile
+        // up indefinitely. Mass conservation broken intentionally.
+        const bm = gridBitmapV23([
+            'g.',
+            'g.',
+        ]);
+        CellularAutomaton.step(bm, 0);
+        // Top gas cell should be gone (escaped); the gas at row 1
+        // either stays or rises into row 0 (depending on lift order).
+        // The KEY behaviour: gas count decreases by 1.
+        let gasCount = 0;
+        for (let y = 0; y < bm.height; y++) {
+            for (let x = 0; x < bm.width; x++) {
+                if (bm.getPixel(x, y) === gas.id) gasCount += 1;
+            }
+        }
+        expect(gasCount).toBe(1);
     });
 
     it('gas pocket trapped under stone with side opening rises out', () => {

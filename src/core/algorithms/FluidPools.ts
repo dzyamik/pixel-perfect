@@ -792,6 +792,7 @@ function liftGasPool(
     materials: MaterialRegistry,
 ): void {
     const W = bitmap.width;
+    const H = bitmap.height;
     const masses = bitmap._getMassArrayUnchecked();
 
     // Collect gas cells in this pool in idx-ascending order so the
@@ -846,12 +847,38 @@ function liftGasPool(
 
     for (const idx of gasCells) {
         const y = (idx / W) | 0;
-        if (y === 0) continue;
         const x = idx - y * W;
         // Cell may have been vacated by a previous swap in this
         // pass (cascade chain). Skip if no longer gas.
         const id = bitmap._readIdUnchecked(x, y);
         if (id === 0) continue;
+        // v3.1.30: gas at the world's top edge with same-gas
+        // pressure from below escapes the simulation. Without
+        // this, a sustained gas pour piles cells at row 0
+        // indefinitely — every tick more gas arrives from below
+        // and the lift has nowhere to lift the topmost row to.
+        // Mass conservation is intentionally broken (gas leaves
+        // the world). Single gas cells or non-gas-below cases
+        // (e.g., a gas bubble that just reached the surface
+        // above water) are left alone, so isolated gas at the
+        // ceiling persists.
+        if (y === 0) {
+            // Pressure check: only evaporate when gas below is
+            // pushing up.
+            const belowId = y + 1 < H
+                ? bitmap._readIdUnchecked(x, y + 1)
+                : 0;
+            if (belowId === id) {
+                bitmap._writeIdUnchecked(x, y, 0);
+                masses[idx] = 0;
+                bitmap._markCellChanged(x, y, true);
+                poolIds[idx] = NO_POOL;
+                // Wake the cell directly below so the gas-pool
+                // detection sees the new top boundary next tick.
+                bitmap._markCellChanged(x, y + 1, false);
+            }
+            continue;
+        }
         // First try straight up.
         if (canSwapInto(x, y - 1, id)) {
             swapWith(x, y, x, y - 1, idx, id);
