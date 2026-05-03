@@ -211,6 +211,8 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
             stepLiquid(bitmap, materials, x, y, id, W, H, +1, RANK_WATER, lateralReach, sxFlip, poolIds);
         } else if (kind === 'oil') {
             stepLiquid(bitmap, materials, x, y, id, W, H, +1, RANK_OIL, lateralReach, sxFlip, poolIds);
+        } else if (kind === 'napalm') {
+            stepLiquid(bitmap, materials, x, y, id, W, H, +1, RANK_NAPALM, lateralReach, sxFlip, poolIds);
         } else if (kind === 'gas') {
             stepLiquid(bitmap, materials, x, y, id, W, H, -1, RANK_GAS, lateralReach, sxFlip, poolIds);
         } else if (kind === 'fire') {
@@ -223,6 +225,10 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
 const RANK_AIR = 1;
 const RANK_GAS = 0;
 const RANK_FIRE = 2;
+// v3.1.23: napalm sits between fire (2) and oil (3) so a unified
+// pool stratifies napalm above oil and below water. Same flow
+// rules as oil — only the rank constant differs.
+const RANK_NAPALM = 2.5;
 const RANK_OIL = 3;
 const RANK_WATER = 4;
 const RANK_SAND = 5;
@@ -681,6 +687,7 @@ function densityRank(id: number, materials: MaterialRegistry): number {
     switch (kind) {
         case 'gas': return RANK_GAS;
         case 'fire': return RANK_FIRE;
+        case 'napalm': return RANK_NAPALM;
         case 'oil': return RANK_OIL;
         case 'water': return RANK_WATER;
         case 'sand': return RANK_SAND;

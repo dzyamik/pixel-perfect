@@ -140,6 +140,7 @@ fluid-feature passes when relevant.
 | v3.1.20 — gas correctness in unified pool + transition-row drift | ✅ done | `v3.1.20` |
 | v3.1.21 — distribute-lift for stuck bubbles (overhang / cavity) | ✅ done | `v3.1.21` |
 | v3.1.22 — demo 09 brush stream + deterministic distribute order | ✅ done | `v3.1.22` |
+| v3.1.23 — napalm distinct rank (sorts above oil) | ✅ done | `v3.1.23` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 | v3.2.x — air handling (remaining backlog items) | ⬜ backlog | — |
 

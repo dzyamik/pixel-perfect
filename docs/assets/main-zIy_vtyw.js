@@ -14,8 +14,9 @@ const n=`/**
  *  - **fire**  doesn't move; ignites adjacent flammable cells; dies
  *               after \`burnDuration\` ticks.
  *  - **wood**  static + flammable — fire's preferred fuel.
- *  - **napalm** flammable oil (v3.1.18) — \`'oil'\` simulation +
- *               \`flammable: true\`; ignites and burns across the
+ *  - **napalm** flammable liquid that floats above oil (v3.1.23
+ *               gives it \`'napalm'\` simulation kind, density rank
+ *               2.5 < oil rank 3); ignites and burns across the
  *               connected pool when fire touches it.
  *  - **stone** plain static terrain (the funnel + floor).
  *  - **settled-sand** static promotion target; generates colliders.
@@ -180,24 +181,25 @@ const WOOD: Material = {
 // @endsnippet
 
 // @snippet napalm
-// @title Napalm — flammable oil (v3.1.18)
-// @desc A flammable variant of oil: same \`'oil'\` simulation kind
-// @desc (density rank 3, floats on water, sinks through gas) but
-// @desc \`flammable: true\` so an adjacent fire cell ignites it.
-// @desc Each ignited cell turns to fire; the per-tick "fire
-// @desc spreads to one flammable cardinal neighbor" rule then
-// @desc walks the flame across the connected napalm pool, leaving
-// @desc air behind as each cell's burn timer expires.
+// @title Napalm — flammable lighter-than-oil (v3.1.18, v3.1.23)
+// @desc A flammable liquid that floats above oil (density rank
+// @desc 2.5 vs oil rank 3 — see \`SimulationKind\`). Same flow
+// @desc rules as oil otherwise: sinks into air / gas, blocked by
+// @desc water (which it floats on too). \`flammable: true\` makes
+// @desc an adjacent fire ignite the pool — each ignited cell
+// @desc turns to fire and the per-tick "fire spreads to one
+// @desc flammable cardinal neighbor" rule walks the flame across
+// @desc the connected pool until cells burn out to air.
 const NAPALM: Material = {
     id: 9,
     name: 'napalm',
     color: 0xb84020,
-    density: 0.95,
+    density: 0.85,
     friction: 0.15,
     restitution: 0,
     destructible: true,
     destructionResistance: 0,
-    simulation: 'oil',
+    simulation: 'napalm',
     flowDistance: 3,
     flammable: true,
 };
@@ -441,7 +443,7 @@ class FallingSandScene extends Phaser.Scene {
         const x1 = Math.min(WIDTH - 1, Math.ceil(cx + r));
         const y1 = Math.min(HEIGHT - 1, Math.ceil(cy + r));
         const sim = bm.materials.get(materialId)?.simulation;
-        const isFluid = sim === 'water' || sim === 'oil' || sim === 'gas';
+        const isFluid = sim === 'water' || sim === 'oil' || sim === 'napalm' || sim === 'gas';
         for (let y = y0; y <= y1; y++) {
             for (let x = x0; x <= x1; x++) {
                 const dx = x - cx;

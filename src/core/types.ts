@@ -26,8 +26,8 @@ export interface Point {
  * Vertical motion follows a density ordering — heavier sinks, lighter
  * rises. Density ranks (high → low):
  *
- *     static  >  sand (5)  >  water (4)  >  oil (3)  >  fire (2)
- *                          >  air  (1)  >  gas (0)
+ *     static  >  sand (5)  >  water (4)  >  oil (3)  >  napalm (2.5)
+ *                          >  fire (2)  >  air  (1)  >  gas (0)
  *
  * Two cells of different ranks swap places when doing so brings the
  * heavier one closer to the floor. `'static'` materials never swap.
@@ -44,6 +44,11 @@ export interface Point {
  * - `'oil'` — liquid lighter than water: falls into air / gas only
  *   (rank 3 vs water rank 4 means oil floats on water), otherwise
  *   spreads horizontally.
+ * - `'napalm'` — flammable liquid lighter than oil (rank 2.5).
+ *   Same flow rules as `'oil'` — sinks into air/gas, floats on
+ *   oil/water — but distinguished in the unified-pool density
+ *   sort so it surfaces above oil. Pair with `flammable: true`
+ *   so adjacent fire ignites the pool.
  * - `'gas'` — lighter than air: rises straight up (density swap),
  *   diagonal-up, horizontal spread. Bubbles up through liquids.
  * - `'fire'` — doesn't translate. Each tick, ignites one adjacent
@@ -55,7 +60,7 @@ export interface Point {
  * Only `'static'` materials generate Box2D colliders. Fluid mutations
  * therefore don't trigger per-frame physics rebuilds.
  */
-export type SimulationKind = 'static' | 'sand' | 'water' | 'oil' | 'gas' | 'fire';
+export type SimulationKind = 'static' | 'sand' | 'water' | 'oil' | 'napalm' | 'gas' | 'fire';
 
 /**
  * Description of a material that can occupy a bitmap cell.

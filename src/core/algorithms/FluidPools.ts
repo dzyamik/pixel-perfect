@@ -98,6 +98,7 @@ export interface FluidPool {
 function fluidRank(simulation: string): number {
     switch (simulation) {
         case 'gas': return 0;
+        case 'napalm': return 2.5;
         case 'oil': return 3;
         case 'water': return 4;
         default: return -1;
@@ -459,7 +460,7 @@ export function detectPools(
         if (cached !== undefined) return cached;
         const mat = materials.get(mid);
         const sim = mat?.simulation;
-        const v = sim === 'water' || sim === 'oil' || sim === 'gas';
+        const v = sim === 'water' || sim === 'oil' || sim === 'napalm' || sim === 'gas';
         isFluidCache.set(mid, v);
         return v;
     };

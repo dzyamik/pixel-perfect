@@ -1812,6 +1812,72 @@ describe('CellularAutomaton.step — enclosed air bubbles rise (v3.1.19)', () =>
     });
 });
 
+describe('CellularAutomaton.step — napalm above oil (v3.1.23)', () => {
+    // v3.1.23: napalm has its own simulation kind with rank 2.5
+    // (between fire 2 and oil 3), so a unified pool stratifies
+    // napalm above oil. Pre-v3.1.23 napalm shared oil's rank
+    // (3) so the pool's distribute couldn't decide which one
+    // should sit on top — flood-fill insertion order alone
+    // determined it, and napalm could end up below oil.
+    const napalm: Material = {
+        id: 9,
+        name: 'napalm',
+        color: 0,
+        density: 0.85,
+        friction: 0,
+        restitution: 0,
+        destructible: true,
+        destructionResistance: 0,
+        simulation: 'napalm',
+        flammable: true,
+    };
+
+    it('mixed water + oil + napalm pool stratifies napalm at top', () => {
+        const W = 8;
+        const H = 14;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [water, oil, napalm, stone],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        for (let y = 0; y < H; y++) {
+            bm.setPixel(0, y, stone.id);
+            bm.setPixel(W - 1, y, stone.id);
+        }
+        // Place inverted: napalm at the bottom, oil middle, water
+        // top — sim should sort water → bottom, oil → middle,
+        // napalm → top.
+        for (let y = H - 5; y < H - 1; y++) {
+            for (let x = 1; x < W - 1; x++) bm.setPixel(x, y, napalm.id);
+        }
+        for (let y = H - 8; y < H - 5; y++) {
+            for (let x = 1; x < W - 1; x++) bm.setPixel(x, y, oil.id);
+        }
+        for (let y = H - 11; y < H - 8; y++) {
+            for (let x = 1; x < W - 1; x++) bm.setPixel(x, y, water.id);
+        }
+        for (let t = 0; t < 30; t++) CellularAutomaton.step(bm, t);
+        // Top 4 rows of fluid: napalm.
+        for (let x = 1; x < W - 1; x++) {
+            for (let y = H - 11; y < H - 7; y++) {
+                expect(bm.getPixel(x, y)).toBe(napalm.id);
+            }
+        }
+        // Middle 3 rows: oil.
+        for (let x = 1; x < W - 1; x++) {
+            for (let y = H - 7; y < H - 4; y++) {
+                expect(bm.getPixel(x, y)).toBe(oil.id);
+            }
+        }
+        // Bottom 3 rows: water.
+        for (let x = 1; x < W - 1; x++) {
+            for (let y = H - 4; y < H - 1; y++) {
+                expect(bm.getPixel(x, y)).toBe(water.id);
+            }
+        }
+    });
+});
+
 describe('CellularAutomaton.step — air displacement under overhang (v3.1.21)', () => {
     // v3.1.21: bubbles stuck under an overhang (cell above is NOT
     // a pool fluid) can't rise via the v3.1.19 per-tick lift —
