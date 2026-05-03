@@ -14,14 +14,17 @@
  *  - **fire**  doesn't move; ignites adjacent flammable cells; dies
  *               after `burnDuration` ticks.
  *  - **wood**  static + flammable — fire's preferred fuel.
+ *  - **napalm** flammable oil (v3.1.18) — `'oil'` simulation +
+ *               `flammable: true`; ignites and burns across the
+ *               connected pool when fire touches it.
  *  - **stone** plain static terrain (the funnel + floor).
  *  - **settled-sand** static promotion target; generates colliders.
  *
  *   left mouse  → spawn the active material at the cursor (drag)
  *   right mouse → carve any static cell (stone, wood, settled sand)
  *   wheel       → resize brush
- *   1 / 2 / 3 / 4 / 5 / 6
- *               → switch active material (sand / water / oil / gas / fire / wood)
+ *   1 / 2 / 3 / 4 / 5 / 6 / 7
+ *               → switch active material (sand / water / oil / gas / fire / wood / napalm)
  *   space       → one-shot patch of the active material at the top
  *   B           → drop a debris ball
  *   R           → reset terrain + clear everything
@@ -176,6 +179,30 @@ const WOOD: Material = {
 };
 // @endsnippet
 
+// @snippet napalm
+// @title Napalm — flammable oil (v3.1.18)
+// @desc A flammable variant of oil: same `'oil'` simulation kind
+// @desc (density rank 3, floats on water, sinks through gas) but
+// @desc `flammable: true` so an adjacent fire cell ignites it.
+// @desc Each ignited cell turns to fire; the per-tick "fire
+// @desc spreads to one flammable cardinal neighbor" rule then
+// @desc walks the flame across the connected napalm pool, leaving
+// @desc air behind as each cell's burn timer expires.
+const NAPALM: Material = {
+    id: 9,
+    name: 'napalm',
+    color: 0xb84020,
+    density: 0.95,
+    friction: 0.15,
+    restitution: 0,
+    destructible: true,
+    destructionResistance: 0,
+    simulation: 'oil',
+    flowDistance: 3,
+    flammable: true,
+};
+// @endsnippet
+
 interface Ball {
     bodyId: BodyId;
     image: Phaser.GameObjects.Image;
@@ -237,7 +264,7 @@ class FallingSandScene extends Phaser.Scene {
             y: this.terrainOriginY,
             worldId: this.worldId,
             pixelsPerMeter: PIXELS_PER_METER,
-            materials: [STONE, SAND, WATER, SETTLED_SAND, OIL, GAS, FIRE, WOOD],
+            materials: [STONE, SAND, WATER, SETTLED_SAND, OIL, GAS, FIRE, WOOD, NAPALM],
             autoSimulate: true,
         });
         // @endsnippet
@@ -288,6 +315,7 @@ class FallingSandScene extends Phaser.Scene {
         this.input.keyboard?.on('keydown-FOUR', () => { this.activeFluid = GAS; });
         this.input.keyboard?.on('keydown-FIVE', () => { this.activeFluid = FIRE; });
         this.input.keyboard?.on('keydown-SIX', () => { this.activeFluid = WOOD; });
+        this.input.keyboard?.on('keydown-SEVEN', () => { this.activeFluid = NAPALM; });
         this.input.keyboard?.on('keydown-B', () => {
             const p = this.input.activePointer;
             this.spawnBall(p.worldX, p.worldY);
@@ -296,7 +324,7 @@ class FallingSandScene extends Phaser.Scene {
         this.stats = attachStats(this);
         showHint(
             this,
-            'L: paint · R-click: carve · 1-6: sand/water/oil/gas/fire/wood · B: ball · R: reset',
+            'L: paint · R-click: carve · 1-7: sand/water/oil/gas/fire/wood/napalm · B: ball · R: reset',
             8000,
         );
     }
@@ -354,6 +382,7 @@ class FallingSandScene extends Phaser.Scene {
             oil: counts.oil,
             gas: counts.gas,
             fire: counts.fire,
+            napalm: counts.napalm,
             balls: this.balls.length,
         });
     }
@@ -497,6 +526,7 @@ class FallingSandScene extends Phaser.Scene {
         oil: number;
         gas: number;
         fire: number;
+        napalm: number;
     } {
         // Cheap visual stat — iterate the bitmap each frame. For
         // larger worlds this would be tracked via a deposit/remove
@@ -509,6 +539,7 @@ class FallingSandScene extends Phaser.Scene {
         let oil = 0;
         let gas = 0;
         let fire = 0;
+        let napalm = 0;
         for (let y = 0; y < HEIGHT; y++) {
             for (let x = 0; x < WIDTH; x++) {
                 const id = bm.getPixel(x, y);
@@ -518,9 +549,10 @@ class FallingSandScene extends Phaser.Scene {
                 else if (id === OIL.id) oil++;
                 else if (id === GAS.id) gas++;
                 else if (id === FIRE.id) fire++;
+                else if (id === NAPALM.id) napalm++;
             }
         }
-        return { sand, water, settledSand, oil, gas, fire };
+        return { sand, water, settledSand, oil, gas, fire, napalm };
     }
 }
 

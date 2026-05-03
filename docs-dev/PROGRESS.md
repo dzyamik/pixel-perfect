@@ -2,13 +2,68 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-03, v3.1.17 unified multi-fluid pools (oil rises through water)
+> Last updated: 2026-05-03, v3.1.18 napalm material + air-iteration backlog
 
 ---
 
 ## Open issues
 
 (none — v3.1.2 closed the fall-column-as-wall issue.)
+
+---
+
+## Future iterations — air handling
+
+Today air (id `0`) is the implicit "empty" state: no mass, no
+pool membership, no simulation rules. That works for the common
+case (water falls through air, oil floats on top of water) but
+several scenarios reveal missing behaviour. Capture them here so
+later passes can pick the right ones to address:
+
+1. **Trapped air pockets inside fluid bodies.** Carve a small
+   air bubble in the middle of a settled water pool. The bubble
+   stays put — water above doesn't fall in to displace it
+   because there's no air-rises-through-water rule. Real physics
+   wants the bubble to migrate upward and exit. Candidate fix:
+   treat air as a virtual rank-1.5 (lighter than oil rank 3,
+   heavier than gas rank 0) for pool-detection purposes ONLY if
+   it is fully enclosed by fluid cells, and let
+   `distributePoolMass` swap it to the top of the connected body.
+
+2. **Air displacement when fluid falls into a sealed cavity.**
+   Pour water into a closed-top container with an air-filled
+   bottom chamber connected by a narrow neck. Real physics:
+   water enters, air bubbles out the neck (or stays trapped at
+   pressure). Today: water just stops at the surface of the air
+   pocket (since the cavity contains air not water, the pool
+   detection treats it as a separate region). Linked to (1).
+
+3. **Air vs gas at boundaries.** Gas (rank 0) is supposed to
+   rise through air (rank 1) via the existing density swap. The
+   v3.1.17 unified pool does NOT include air — gas pools and
+   surrounding air remain separate. If a gas bubble exits the
+   top of its pool into adjacent air, the per-cell `stepLiquid`
+   handles it (yDir=-1 swap). Verify this still works after
+   v3.1.17 with mixed-fluid containers (gas pool inside water
+   pool, gas should bubble up through water but not commingle
+   with water mass in the pool fast-path).
+
+4. **"Suction" on fluid drainage.** Carving a hole below a
+   sealed water column should pull the column down faster than
+   gravity (real-world siphon / barometric column). Today the
+   column drains at the cellular-automaton's fluid rate, which
+   is much slower than physical free-fall. Likely never worth
+   modelling, but document as deliberately not-physical.
+
+5. **Air mass conservation through `setPixel`.** A pool cell
+   demoted to air via `setPixel(x, y, 0)` zeroes the mass
+   array; air cells then have no mass. If a future feature
+   needs "air pressure" (e.g. detonation pushing a wave through
+   air), the mass array would need to allow air-id mass
+   tracking. Currently safe to ignore.
+
+These don't block any current demo. Pick them up alongside
+fluid-feature passes when relevant.
 
 ---
 
@@ -65,9 +120,50 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v3.1.15 — width-from-depth + scan-direction ping-pong + POOL_MIN_SIZE=2 | ✅ done | `v3.1.15` |
 | v3.1.16 — within-row x-order ping-pong | ✅ done | `v3.1.16` |
 | v3.1.17 — unified multi-fluid pools + hydrostatic density sort | ✅ done | `v3.1.17` |
+| v3.1.18 — napalm material (flammable oil) | ✅ done | `v3.1.18` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
+| v3.2.x — air handling (trapped pockets, displacement, etc.) | ⬜ backlog | — |
 
 Test suite: 381 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.18 — napalm material (2026-05-03)
+
+User-requested in the same session as v3.1.17: a flammable oil
+("napalm" / "gasoline") that flows like oil but burns when
+ignited. Demo-only addition; no core sim changes required.
+
+### Mechanism
+
+- New material registered with `id: 9`, `simulation: 'oil'`,
+  `flammable: true`, slightly heavier than oil (`density: 0.95`)
+  to bias it under regular oil if both are in play.
+- `stepFire` already checks `neighborMat.flammable` regardless
+  of simulation kind — fluid + flammable was a free combination,
+  no fire-side changes needed.
+- An ignited napalm cell becomes a fire cell via `setPixel`,
+  which auto-resets the cell's mass to 1.0 and burns for the
+  fire material's `burnDuration` (40 ticks). The per-tick "fire
+  spreads to one cardinal flammable neighbor" rule walks the
+  flame across the connected napalm pool at ~1 cell/tick.
+- Demo brush detects napalm via the existing
+  `simulation === 'oil'` check, so it deposits at mass 0.5
+  through the same walk-down-to-supported-cell path as oil and
+  water.
+
+### Files affected
+
+- `examples/09-falling-sand/main.ts` — new `NAPALM` material
+  constant, `'7'` keybinding, registration, count display, hint
+  text, `@snippet napalm` docblock.
+
+### Behavior verified
+
+- Napalm pours, floats above water (rank 3, same as oil).
+- Fire touching napalm ignites it; the flame walks across the
+  pool over the burn duration.
+- 381 unit tests still pass; typecheck + lint clean.
 
 ---
 
