@@ -186,7 +186,7 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
         // cells in pools, the gas blob translates as a single unit
         // through open air rather than smearing upward (per-cell
         // stepLiquid processes cells y-desc which distorts shape).
-        liftGasPoolsAll(bitmap, pools, materials);
+        liftGasPoolsAll(bitmap, pools, materials, tick);
         poolIds = bitmap._getPoolIdsUnchecked();
     }
 

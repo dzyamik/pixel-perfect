@@ -790,6 +790,7 @@ function liftGasPool(
     pool: FluidPool,
     poolIds: Uint16Array,
     materials: MaterialRegistry,
+    tick: number,
 ): void {
     const W = bitmap.width;
     const H = bitmap.height;
@@ -809,6 +810,9 @@ function liftGasPool(
         gasCells.push(idx);
     }
     if (gasCells.length === 0) return;
+    // Up + diagonal-up phase always processes idx-asc so the
+    // cascade can carry a vertical column upward without splitting
+    // (each cell rises into the air the cell above just vacated).
     gasCells.sort((a, b) => a - b);
 
     // Helper: can `(tx, ty)` accept a swap from a gas cell?
@@ -846,11 +850,14 @@ function liftGasPool(
     };
 
     void H;
+
+    // Pass 1: vertical and diagonal-up lift. Cells that don't
+    // move here are stuck against a non-static ceiling/wall and
+    // are candidates for lateral spread in pass 2.
+    const stuckCells: number[] = [];
     for (const idx of gasCells) {
         const y = (idx / W) | 0;
         const x = idx - y * W;
-        // Cell may have been vacated by a previous swap in this
-        // pass (cascade chain). Skip if no longer gas.
         const id = bitmap._readIdUnchecked(x, y);
         if (id === 0) continue;
         // 1. Try straight up.
@@ -862,10 +869,10 @@ function liftGasPool(
         //    overhang or angled wall. Alternate the side tried
         //    first by row parity for L/R symmetry.
         const tryLeftFirst = (y & 1) === 0;
-        const sides = tryLeftFirst ? [-1, 1] : [1, -1];
+        const diagSides = tryLeftFirst ? [-1, 1] : [1, -1];
         if (y > 0) {
             let movedDiag = false;
-            for (const sx of sides) {
+            for (const sx of diagSides) {
                 if (canSwapInto(x + sx, y - 1, id)) {
                     swapWith(x, y, x + sx, y - 1, idx, id);
                     movedDiag = true;
@@ -874,19 +881,29 @@ function liftGasPool(
             }
             if (movedDiag) continue;
         }
-        // 3. v3.1.30 — lateral spread. Gas at the ceiling (row 0
-        //    or under stone) flattens its surface against the
-        //    barrier. Gas pools then accumulate top-down: row 0
-        //    fills laterally, then row 1, etc. Without this gas
-        //    formed a vertical chimney at the brush position
-        //    (each cell pinned because nothing above moved).
-        //
-        //    Spread only when there's same-gas on the OPPOSITE
-        //    side — this ensures isolated gas cells don't
-        //    oscillate (single cell with air on both sides has
-        //    no opposite gas, stays put), and the pool's edge
-        //    cells (gas on one side, air on the other) push
-        //    outward into the air.
+        // No vertical/diagonal motion — defer to lateral pass.
+        stuckCells.push(idx);
+    }
+
+    // Pass 2: lateral spread. v3.1.30 — gas at the ceiling
+    // (row 0 or under stone) flattens its surface against the
+    // barrier. Spread only when there's same-gas on the OPPOSITE
+    // side (so isolated cells don't oscillate; a pool's edge
+    // cells push outward into the air on the other side).
+    //
+    // Cascade direction alternates by tick parity: even ticks
+    // process stuck cells idx-asc (cascade drags pool left),
+    // odd ticks idx-desc (drags right). The user-reported bug
+    // was a fixed left-cascade — sustained pours filled only the
+    // left side of the brush. Alternating gives bilateral fill.
+    if ((tick & 1) === 1) stuckCells.reverse();
+    for (const idx of stuckCells) {
+        const y = (idx / W) | 0;
+        const x = idx - y * W;
+        const id = bitmap._readIdUnchecked(x, y);
+        if (id === 0) continue;
+        const tryLeftFirst = (y & 1) === 0;
+        const sides = tryLeftFirst ? [-1, 1] : [1, -1];
         for (const sx of sides) {
             const oppX = x - sx;
             if (oppX < 0 || oppX >= W) continue;
@@ -906,9 +923,10 @@ export function liftGasPoolsAll(
     bitmap: ChunkedBitmap,
     pools: Map<number, FluidPool>,
     materials: MaterialRegistry,
+    tick: number,
 ): void {
     const poolIds = bitmap._getPoolIdsUnchecked();
     for (const pool of pools.values()) {
-        liftGasPool(bitmap, pool, poolIds, materials);
+        liftGasPool(bitmap, pool, poolIds, materials, tick);
     }
 }
