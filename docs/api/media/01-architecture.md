@@ -495,6 +495,19 @@ and `v3.1.21` (distribute-lift for stuck bubbles: cells trapped
 under a stone overhang — whose up-neighbor is NOT a pool fluid
 cell — are routed through `distributePoolMass`, which relocates
 them to the topmost rows of the pool footprint in one tick).
+The `v3.1.28-34` chain hardens the gas pool path: gas pools
+translate as a single mass via a per-pool `liftGasPool` (rather
+than relying on per-cell `stepLiquid`, which processes cells
+y-desc and would distort a rising blob's shape), gas slides
+diagonally past overhangs, spreads laterally against ceilings,
+and — as of `v3.1.33` — applies the lift as a polygon column
+shift: read upcells once, copy the gas masses up by `k` rows in
+a tight loop, write `k` cells of gas at the top + `k` cells of
+air at the bottom. `v3.1.34` raises the lift rate to 6 rows per
+tick (vertical and lateral). `v3.1.32` also caches the air-flood
+`visited` scratch and fast-paths edge-touching air components,
+so the per-tick pool pipeline doesn't allocate a fresh
+`Uint8Array(W×H)` each frame.
 v3 details in `docs-dev/06-v3-mass-based-fluid.md`,
 `docs-dev/07-v3.1-pool-based-fluid.md`, and the running ledger in
 `docs-dev/PROGRESS.md`.

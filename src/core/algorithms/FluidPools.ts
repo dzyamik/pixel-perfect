@@ -28,6 +28,17 @@ import type { MaterialRegistry } from '../Materials.js';
 export const NO_POOL = 0xFFFF;
 
 /**
+ * Maximum number of rows a gas column can rise per tick. v3.1.34 —
+ * bumped from 2 to 6 at the user's request ("make gas speed 3x
+ * from current"). Used by both the polygon column shift (clamps
+ * the shift `k`) and the per-cell cascade fallback (caps the
+ * straight-up multi-hop). Lateral spread also uses the same rate
+ * for symmetry — a gas pool flattening against a ceiling advances
+ * the same number of cells horizontally per tick as it rises.
+ */
+const GAS_LIFT_RATE = 6;
+
+/**
  * Connected component of fluid cells (water / oil / gas).
  *
  * Pools are owned by `ChunkedBitmap` and rebuilt (phase 1) or
@@ -565,6 +576,49 @@ export function detectPools(
  * detection in typical scenes (most air is open air = one big
  * non-enclosed component).
  */
+// v3.1.32 perf: cache the `visited` Uint8Array across calls. The
+// previous per-call allocation was the largest GC source in the
+// pool pipeline (W*H bytes per tick × 60 fps). Grows monotonically
+// to the largest bitmap seen — `fill(0)` is much cheaper than
+// allocating a new array every frame.
+let _visitedScratch: Uint8Array | null = null;
+function getVisitedScratch(size: number): Uint8Array {
+    if (_visitedScratch === null || _visitedScratch.length < size) {
+        _visitedScratch = new Uint8Array(size);
+    } else {
+        _visitedScratch.fill(0, 0, size);
+    }
+    return _visitedScratch;
+}
+
+// v3.1.33 perf: per-column scratch arrays for the polygon-style
+// gas-pool lift. `liftGasPool` builds a per-column footprint
+// (topmost / bottommost gas y in that column) and shifts entire
+// gas columns up in O(L) work per column instead of cascading
+// cell-by-cell. Reused across calls so we don't allocate per pool
+// per tick.
+let _topRowScratch: Int32Array | null = null;
+let _botRowScratch: Int32Array | null = null;
+let _countScratch: Int32Array | null = null;
+function getColScratch(W: number, H: number): {
+    topRow: Int32Array;
+    botRow: Int32Array;
+    count: Int32Array;
+} {
+    if (_topRowScratch === null || _topRowScratch.length < W) {
+        _topRowScratch = new Int32Array(W);
+        _botRowScratch = new Int32Array(W);
+        _countScratch = new Int32Array(W);
+    }
+    const topRow = _topRowScratch;
+    const botRow = _botRowScratch!;
+    const count = _countScratch!;
+    topRow.fill(H, 0, W);
+    botRow.fill(-1, 0, W);
+    count.fill(0, 0, W);
+    return { topRow, botRow, count };
+}
+
 function detectAirBubbles(
     bitmap: ChunkedBitmap,
     poolIds: Uint16Array,
@@ -572,7 +626,7 @@ function detectAirBubbles(
 ): void {
     const W = bitmap.width;
     const H = bitmap.height;
-    const visited = new Uint8Array(W * H);
+    const visited = getVisitedScratch(W * H);
     const stack: number[] = [];
     const componentCells: number[] = [];
 
@@ -589,11 +643,51 @@ function detectAirBubbles(
             stack.push(startIdx);
             visited[startIdx] = 1;
 
+            // v3.1.32 perf: once we know the component touches the
+            // world edge it can't be a bubble — switch to a fast
+            // flood that only marks visited (skip componentCells +
+            // smallestPoolId tracking + bounding-cell reads). For a
+            // typical demo most air is one big edge-connected
+            // component covering most of the bitmap, so this drops
+            // the dominant per-tick cost.
             while (stack.length > 0) {
                 const fi = stack.pop()!;
-                componentCells.push(fi);
                 const cy = (fi / W) | 0;
                 const cx = fi - cy * W;
+
+                if (touchesEdge) {
+                    if (cx > 0) {
+                        const ni = fi - 1;
+                        if (!visited[ni] && bitmap._readIdUnchecked(cx - 1, cy) === 0) {
+                            visited[ni] = 1;
+                            stack.push(ni);
+                        }
+                    }
+                    if (cx + 1 < W) {
+                        const ni = fi + 1;
+                        if (!visited[ni] && bitmap._readIdUnchecked(cx + 1, cy) === 0) {
+                            visited[ni] = 1;
+                            stack.push(ni);
+                        }
+                    }
+                    if (cy > 0) {
+                        const ni = fi - W;
+                        if (!visited[ni] && bitmap._readIdUnchecked(cx, cy - 1) === 0) {
+                            visited[ni] = 1;
+                            stack.push(ni);
+                        }
+                    }
+                    if (cy + 1 < H) {
+                        const ni = fi + W;
+                        if (!visited[ni] && bitmap._readIdUnchecked(cx, cy + 1) === 0) {
+                            visited[ni] = 1;
+                            stack.push(ni);
+                        }
+                    }
+                    continue;
+                }
+
+                componentCells.push(fi);
                 if (cx === 0 || cx === W - 1 || cy === 0 || cy === H - 1) {
                     touchesEdge = true;
                 }
@@ -796,10 +890,27 @@ function liftGasPool(
     const H = bitmap.height;
     const masses = bitmap._getMassArrayUnchecked();
 
-    // Collect gas cells in this pool in idx-ascending order so the
-    // top-of-column lifts first and the next cell down can rise
-    // into the just-vacated slot.
-    const gasCells: number[] = [];
+    // v3.1.33 — polygon column shift. For each column of contiguous
+    // gas with open air directly above, shift the entire column up
+    // by k=1..2 rows in a single bulk operation: read the upcells,
+    // shift the gas masses by k via a tight Float32Array copy, write
+    // gas to the k cells above the column, and write air to the k
+    // cells at the column's old bottom. This is mathematically
+    // equivalent to running the existing per-cell cascade (each gas
+    // cell swaps with the air just vacated by the cell above) but
+    // collapses O(L) per-cell `_writeIdUnchecked` + `_markCellChanged`
+    // calls into ~4 — for a 50-row column, ~50× fewer id writes and
+    // ~4× fewer dirty-set ops. Columns that can't polygon-shift
+    // (top blocked by stone, non-contiguous, or upcell isn't open
+    // air) fall through to the per-cell cascade for diagonal-up and
+    // lateral-spread handling.
+    //
+    // First pass: build per-column topmost / bottommost gas-y and
+    // a count of gas cells in each column. Track the gas material
+    // id so the cascade fallback knows which cells to consider.
+    const { topRow, botRow, count } = getColScratch(W, H);
+    let gasMaterialId = -1;
+    let foundAnyGas = false;
     for (const idx of pool.cells) {
         const cy = (idx / W) | 0;
         const cx = idx - cy * W;
@@ -807,12 +918,94 @@ function liftGasPool(
         if (id === 0) continue;
         const mat = materials.get(id);
         if (mat?.simulation !== 'gas') continue;
-        gasCells.push(idx);
+        if (gasMaterialId === -1) gasMaterialId = id;
+        else if (id !== gasMaterialId) continue;
+        if (cy < topRow[cx]!) topRow[cx] = cy;
+        if (cy > botRow[cx]!) botRow[cx] = cy;
+        count[cx]!++;
+        foundAnyGas = true;
     }
-    if (gasCells.length === 0) return;
-    // Up + diagonal-up phase always processes idx-asc so the
-    // cascade can carry a vertical column upward without splitting
-    // (each cell rises into the air the cell above just vacated).
+    if (!foundAnyGas) return;
+
+    // Polygon column shift — try each gas column.
+    // Cells in columns that can't polygon-shift go through the
+    // per-cell cascade (diagonal try + lateral spread).
+    const cellsForPerCell: number[] = [];
+    for (let x = 0; x < W; x++) {
+        const cnt = count[x]!;
+        if (cnt === 0) continue;
+        const top = topRow[x]!;
+        const bot = botRow[x]!;
+        const colLen = bot - top + 1;
+        const isContig = cnt === colLen;
+
+        // Polygon shift requires:
+        //  - column not pinned at row 0 (top > 0)
+        //  - contiguous gas (no internal water / oil)
+        //  - upcell at top-1 is OPEN AIR (id 0). Non-air upcells go
+        //    through the per-cell cascade so cross-density swaps
+        //    (gas-into-water in the same pool) keep their existing
+        //    semantics.
+        if (top === 0 || !isContig) {
+            for (let y = top; y <= bot; y++) {
+                const cellIdx = y * W + x;
+                if (bitmap._readIdUnchecked(x, y) === gasMaterialId) {
+                    cellsForPerCell.push(cellIdx);
+                }
+            }
+            continue;
+        }
+        const upId1 = bitmap._readIdUnchecked(x, top - 1);
+        if (upId1 !== 0) {
+            for (let y = top; y <= bot; y++) {
+                cellsForPerCell.push(y * W + x);
+            }
+            continue;
+        }
+        // Find the largest k ≤ GAS_LIFT_RATE such that all cells
+        // (x, top-1) .. (x, top-k) are open air. v3.1.34 — bumped
+        // to 6 rows/tick at the user's request ("3x current rate").
+        let k = 1;
+        while (k < GAS_LIFT_RATE
+            && top - k - 1 >= 0
+            && bitmap._readIdUnchecked(x, top - k - 1) === 0) {
+            k++;
+        }
+
+        // Shift gas masses up by k rows. Iterate ascending so the
+        // source `r + k` hasn't been overwritten yet.
+        for (let r = top - k; r <= bot - k; r++) {
+            masses[r * W + x] = masses[(r + k) * W + x]!;
+        }
+        // Write gas to the new top-k cells (was air, now gas).
+        for (let r = top - k; r < top; r++) {
+            const cellIdx = r * W + x;
+            bitmap._writeIdUnchecked(x, r, gasMaterialId);
+            poolIds[cellIdx] = pool.id;
+            // Skip neighbor wakeup — gas movement is handled by
+            // lift, not stepLiquid (per v3.1.32).
+            bitmap._markCellChanged(x, r, false);
+        }
+        // Mass-only mark for cells that stayed gas with new mass.
+        for (let r = top; r <= bot - k; r++) {
+            bitmap._markCellChanged(x, r, false);
+        }
+        // Vacate the bottom k cells (overlap with the gas-write
+        // range above when colLen < k; the air write here wins,
+        // matching the cascade end-state for short columns).
+        for (let r = bot - k + 1; r <= bot; r++) {
+            const cellIdx = r * W + x;
+            bitmap._writeIdUnchecked(x, r, 0);
+            masses[cellIdx] = 0;
+            poolIds[cellIdx] = pool.id;
+            bitmap._markCellChanged(x, r, false);
+        }
+    }
+
+    // Cells from non-shiftable columns fall back to the per-cell
+    // cascade for diagonal-up + lateral-spread handling.
+    if (cellsForPerCell.length === 0) return;
+    const gasCells = cellsForPerCell;
     gasCells.sort((a, b) => a - b);
 
     // Helper: can `(tx, ty)` accept a swap from a gas cell?
@@ -833,18 +1026,29 @@ function liftGasPool(
     // fluid cells in the per-cell pass see them as bubble cells
     // and don't laterally donate in (re-unifying the pool would
     // otherwise let `distributePoolMass` undo the lift).
+    //
+    // v3.1.32 perf: only do the 8-neighbor active-set wake-up when
+    // the target was a NON-AIR, NON-GAS fluid (we just swapped a
+    // gas cell with a heavier fluid cell, those neighbors might
+    // want to react). Gas-to-air swaps — by far the common case
+    // for a rising or spreading gas pool — only need the swapped
+    // cells themselves marked: gas movement is handled by lift
+    // (not per-cell stepLiquid), so waking surrounding gas/air
+    // cells just inflates the active set without enabling any
+    // useful work next tick.
     const swapWith = (x: number, y: number, tx: number, ty: number,
                        idx: number, gasId: number): void => {
         const targetIdx = ty * W + tx;
         const tid = bitmap._readIdUnchecked(tx, ty);
+        const wakeNeighbors = tid !== 0;
         const gasMass = masses[idx]!;
         const tMass = tid === 0 ? 0 : masses[targetIdx]!;
         bitmap._writeIdUnchecked(tx, ty, gasId);
         masses[targetIdx] = gasMass;
-        bitmap._markCellChanged(tx, ty, true);
+        bitmap._markCellChanged(tx, ty, wakeNeighbors);
         bitmap._writeIdUnchecked(x, y, tid);
         masses[idx] = tMass;
-        bitmap._markCellChanged(x, y, true);
+        bitmap._markCellChanged(x, y, wakeNeighbors);
         poolIds[targetIdx] = pool.id;
         // poolIds[idx] stays at pool.id (kept tagged).
     };
@@ -855,14 +1059,14 @@ function liftGasPool(
     // move here are stuck against a non-static ceiling/wall and
     // are candidates for lateral spread in pass 2.
     //
-    // v3.1.31 — DOUBLE-HOP the straight-up swap. After a
-    // successful swap, immediately try another up-swap from the
-    // new position. This doubles the rise rate per tick (2 rows
-    // instead of 1) without breaking the cascade — each cell
-    // still rises into the air the cell above just vacated, and
-    // the second hop fills in cleanly above. Diagonal swaps
-    // intentionally stay single-hop (a diagonal+diagonal pair
-    // would shear the pool shape).
+    // v3.1.31 — DOUBLE-HOP the straight-up swap. v3.1.34 —
+    // generalised to GAS_LIFT_RATE hops at the user's request
+    // ("3x current rate" → 6 rows / tick). After a successful
+    // swap, immediately try more up-swaps from the new position.
+    // Each hop still rises into the air the cell above just
+    // vacated, so the cascade stays correct. Diagonal swaps stay
+    // single-hop (a diagonal+diagonal pair would shear the pool
+    // shape).
     const stuckCells: number[] = [];
     for (const idx of gasCells) {
         const y = (idx / W) | 0;
@@ -872,27 +1076,34 @@ function liftGasPool(
         // 1. Try straight up.
         if (y > 0 && canSwapInto(x, y - 1, id)) {
             swapWith(x, y, x, y - 1, idx, id);
-            // 2x rate: try another up-swap from the new position.
-            if (y > 1 && canSwapInto(x, y - 2, id)) {
-                swapWith(x, y - 1, x, y - 2, idx - W, id);
+            // Multi-hop: continue rising as long as the next cell
+            // up is swappable, capped at GAS_LIFT_RATE total hops.
+            let cy = y - 1;
+            let cidx = idx - W;
+            for (let h = 1; h < GAS_LIFT_RATE; h++) {
+                if (cy > 0 && canSwapInto(x, cy - 1, id)) {
+                    swapWith(x, cy, x, cy - 1, cidx, id);
+                    cy--;
+                    cidx -= W;
+                } else {
+                    break;
+                }
             }
             continue;
         }
         // 2. v3.1.29 — diagonal up. Lets gas slide around an
         //    overhang or angled wall. Alternate the side tried
         //    first by row parity for L/R symmetry.
-        const tryLeftFirst = (y & 1) === 0;
-        const diagSides = tryLeftFirst ? [-1, 1] : [1, -1];
         if (y > 0) {
-            let movedDiag = false;
-            for (const sx of diagSides) {
-                if (canSwapInto(x + sx, y - 1, id)) {
-                    swapWith(x, y, x + sx, y - 1, idx, id);
-                    movedDiag = true;
-                    break;
-                }
+            const sx0 = (y & 1) === 0 ? -1 : 1;
+            if (canSwapInto(x + sx0, y - 1, id)) {
+                swapWith(x, y, x + sx0, y - 1, idx, id);
+                continue;
             }
-            if (movedDiag) continue;
+            if (canSwapInto(x - sx0, y - 1, id)) {
+                swapWith(x, y, x - sx0, y - 1, idx, id);
+                continue;
+            }
         }
         // No vertical/diagonal motion — defer to lateral pass.
         stuckCells.push(idx);
@@ -915,20 +1126,46 @@ function liftGasPool(
         const x = idx - y * W;
         const id = bitmap._readIdUnchecked(x, y);
         if (id === 0) continue;
-        const tryLeftFirst = (y & 1) === 0;
-        const sides = tryLeftFirst ? [-1, 1] : [1, -1];
-        for (const sx of sides) {
-            const oppX = x - sx;
-            if (oppX < 0 || oppX >= W) continue;
-            if (bitmap._readIdUnchecked(oppX, y) !== id) continue;
-            if (canSwapInto(x + sx, y, id)) {
-                swapWith(x, y, x + sx, y, idx, id);
-                // v3.1.31: 2x flatten rate. After the lateral
-                // swap, try another step in the same direction.
-                if (canSwapInto(x + 2 * sx, y, id)) {
-                    swapWith(x + sx, y, x + 2 * sx, y, idx + sx, id);
+        const sx0 = (y & 1) === 0 ? -1 : 1;
+        // First try sx0 side, then opposite side. Inline to avoid
+        // allocating a 2-element array per stuck cell each tick.
+        const oppA = x - sx0;
+        if (oppA >= 0 && oppA < W
+            && bitmap._readIdUnchecked(oppA, y) === id
+            && canSwapInto(x + sx0, y, id)) {
+            swapWith(x, y, x + sx0, y, idx, id);
+            // Multi-hop lateral spread (v3.1.34: GAS_LIFT_RATE).
+            let cx = x + sx0;
+            let cidx = idx + sx0;
+            for (let h = 1; h < GAS_LIFT_RATE; h++) {
+                const nx = cx + sx0;
+                if (canSwapInto(nx, y, id)) {
+                    swapWith(cx, y, nx, y, cidx, id);
+                    cx = nx;
+                    cidx += sx0;
+                } else {
+                    break;
                 }
-                break;
+            }
+            continue;
+        }
+        const sx1 = -sx0;
+        const oppB = x - sx1;
+        if (oppB >= 0 && oppB < W
+            && bitmap._readIdUnchecked(oppB, y) === id
+            && canSwapInto(x + sx1, y, id)) {
+            swapWith(x, y, x + sx1, y, idx, id);
+            let cx = x + sx1;
+            let cidx = idx + sx1;
+            for (let h = 1; h < GAS_LIFT_RATE; h++) {
+                const nx = cx + sx1;
+                if (canSwapInto(nx, y, id)) {
+                    swapWith(cx, y, nx, y, cidx, id);
+                    cx = nx;
+                    cidx += sx1;
+                } else {
+                    break;
+                }
             }
         }
     }

@@ -54,6 +54,12 @@ const oil: Material = {
     destructible: true, destructionResistance: 0,
     simulation: 'oil',
 };
+const gas: Material = {
+    id: 5, name: 'gas', color: 0xa0d0a0,
+    density: 0.05, friction: 0, restitution: 0,
+    destructible: true, destructionResistance: 0,
+    simulation: 'gas',
+};
 
 const W = 256;
 const H = 128;
@@ -179,6 +185,69 @@ describe('CellularAutomaton.step', () => {
         }
         CellularAutomaton.step(bm, 0);
         for (let t = 0; t < 30; t++) CellularAutomaton.step(bm, t);
+    });
+
+    bench('gas pool: 5000 cells pinned at ceiling (steady state)', () => {
+        // Big gas pool against the world's top edge — exercises
+        // the v3.1.28 gas-pool lift hot path. Most cells are
+        // interior (no swap); the perimeter cells try (and mostly
+        // fail) to lift further. This is the demo scenario the
+        // user reported FPS drops in.
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 32,
+            materials: [stone, water, sand, oil, gas],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        // 5000 gas cells in a 100x50 block at the top.
+        const px = (W >> 1) - 50;
+        const py = 0;
+        for (let y = py; y < py + 50; y++) {
+            for (let x = px; x < px + 100; x++) {
+                bm.setMass(x, y, 1.0, gas.id);
+            }
+        }
+        CellularAutomaton.step(bm, 0);
+        for (let t = 0; t < 30; t++) CellularAutomaton.step(bm, t);
+    });
+
+    bench('gas pool: 5000 cells rising in open air (free lift)', () => {
+        // Gas blob that's NOT pinned at the ceiling — sits in the
+        // middle of the world and rises freely each tick. Exercises
+        // the v3.1.33 polygon column-shift hot path.
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 32,
+            materials: [stone, water, sand, oil, gas],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        // 100 × 50 gas block in the middle (open air above + below).
+        const px = (W >> 1) - 50;
+        const py = 60;
+        for (let y = py; y < py + 50; y++) {
+            for (let x = px; x < px + 100; x++) {
+                bm.setMass(x, y, 1.0, gas.id);
+            }
+        }
+        CellularAutomaton.step(bm, 0);
+        for (let t = 0; t < 30; t++) CellularAutomaton.step(bm, t);
+    });
+
+    bench('gas pool: 12000 cells under stone lid (wide spread)', () => {
+        // Wider gas blob under a stone roof — surface flatten path.
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 32,
+            materials: [stone, water, sand, oil, gas],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        // Stone ceiling at row 0.
+        for (let x = 0; x < W; x++) bm.setPixel(x, 0, stone.id);
+        // 12000 gas cells in a 240x50 block under the ceiling.
+        for (let y = 1; y < 51; y++) {
+            for (let x = 8; x < 248; x++) {
+                bm.setMass(x, y, 1.0, gas.id);
+            }
+        }
+        CellularAutomaton.step(bm, 0);
+        for (let t = 0; t < 10; t++) CellularAutomaton.step(bm, t);
     });
 
     bench('first-call seed scan (256×128 cold bitmap)', () => {

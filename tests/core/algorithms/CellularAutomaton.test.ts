@@ -1915,8 +1915,10 @@ describe('CellularAutomaton.step — gas pool moves as a single mass (v3.1.28)',
     // pool's surface row).
 
     it('3x3 gas blob in open air rises as a unit', () => {
+        // World is 24 tall so the blob has room to rise multiple
+        // ticks at the v3.1.34 rate.
         const W = 9;
-        const H = 14;
+        const H = 24;
         const bm = new ChunkedBitmap({
             width: W, height: H, chunkSize: 1,
             materials: [stone, gas],
@@ -1926,21 +1928,22 @@ describe('CellularAutomaton.step — gas pool moves as a single mass (v3.1.28)',
             bm.setPixel(0, y, stone.id);
             bm.setPixel(W - 1, y, stone.id);
         }
-        for (let y = 7; y <= 9; y++) {
+        const startTop = 17;
+        for (let y = startTop; y <= startTop + 2; y++) {
             for (let x = 3; x <= 5; x++) bm.setPixel(x, y, gas.id);
         }
-        // v3.1.31 runs the gas lift twice per tick (2x flatten
-        // rate the user requested), so the blob rises 2 rows per
-        // tick. After 2 ticks it's risen by 4 rows: from rows
-        // 7-9 to rows 3-5. Same shape preserved.
+        // v3.1.34 — gas lift rate is 6 rows per tick (3x of the
+        // v3.1.31 2-row rate, per user request). After 2 ticks the
+        // 3x3 blob has risen 12 rows: from 17-19 to 5-7. Same
+        // shape preserved.
         for (let t = 0; t < 2; t++) CellularAutomaton.step(bm, t);
-        for (let y = 3; y <= 5; y++) {
+        for (let y = 5; y <= 7; y++) {
             for (let x = 3; x <= 5; x++) {
                 expect(bm.getPixel(x, y)).toBe(gas.id);
             }
         }
-        // Cells that the blob vacated (rows 7-9) are now air.
-        for (let y = 7; y <= 9; y++) {
+        // Cells that the blob vacated (rows 17-19) are now air.
+        for (let y = startTop; y <= startTop + 2; y++) {
             for (let x = 3; x <= 5; x++) {
                 expect(bm.getPixel(x, y)).toBe(0);
             }

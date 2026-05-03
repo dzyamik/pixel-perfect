@@ -2,7 +2,7 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-03, v3.1.22 brush stream + deterministic distribute order
+> Last updated: 2026-05-03, v3.1.34 — gas lift rate 3× (6 rows / tick)
 
 ---
 
@@ -149,10 +149,187 @@ fluid-feature passes when relevant.
 | v3.1.29 — diagonal gas lift (slide around walls) | ✅ done | `v3.1.29` |
 | v3.1.30 — gas escapes world edge under pressure (no piling) | ✅ done | `v3.1.30` |
 | v3.1.31 — 2x gas flatten rate (double-hop lift) | ✅ done | `v3.1.31` |
+| v3.1.32 — perf: gas pool throughput (cached air-flood scratch + edge fast-path + skip neighbor wake-up on gas/air swaps) | ✅ done | `v3.1.32` |
+| v3.1.33 — perf: polygon-style gas column shift (treat gas pool as a polygon, lift whole columns at once) | ✅ done | `v3.1.33` |
+| v3.1.34 — gas lift rate 3× (2 → 6 rows / tick, vertical + lateral) | ✅ done | `v3.1.34` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 | v3.2.x — air handling (remaining backlog items) | ⬜ backlog | — |
 
-Test suite: 381 tests across 22 files. typecheck and lint clean.
+Test suite: 390 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.34 — gas lift rate 3× (2026-05-03)
+
+User asked: "make gas speed 3x from current." The previous rate
+(v3.1.31) was 2 rows / tick; new rate is 6 rows / tick.
+
+Implementation introduces a single `GAS_LIFT_RATE` constant (= 6)
+shared by all three motion paths in `liftGasPool`:
+
+- **Polygon column shift** (v3.1.33 fast path): the per-column
+  shift `k` now grows up to `GAS_LIFT_RATE`, walking up the
+  column to find the largest contiguous run of open air above.
+  Falls back to smaller `k` when the air run is shorter.
+- **Per-cell cascade** (fallback for non-shiftable columns):
+  the v3.1.31 double-hop is generalised to a multi-hop loop
+  that keeps swapping straight up until the next cell is no
+  longer swappable, capped at `GAS_LIFT_RATE` total hops.
+- **Lateral spread** (pass 2): the v3.1.31 2-step horizontal
+  spread is generalised to the same multi-hop loop. A gas
+  pool flattening against a ceiling now advances 6 cells per
+  tick on each edge instead of 2.
+
+### Files affected
+
+- `src/core/algorithms/FluidPools.ts` — `GAS_LIFT_RATE`
+  constant, polygon shift `k` loop, cascade multi-hop loop,
+  lateral-spread multi-hop loop.
+- `tests/core/algorithms/CellularAutomaton.test.ts` — the 3×3
+  gas-blob test bumped to a 24-tall world and asserts the
+  blob rises 12 rows in 2 ticks (was 4 rows in 2 ticks).
+
+### Behavior verified
+
+- 390 unit tests pass; typecheck + lint clean.
+- Gas blob rises 6 rows / tick when the column has open air
+  above; clamps gracefully at world edges and stone ceilings.
+
+---
+
+## v3.1.33 — polygon-style gas column shift (2026-05-03)
+
+User suggested: "may be we could handle [gas] as we did with
+fluid: when some number of gas elements together — handle it as
+one polygon." The fluid pool optimization skips per-cell
+`stepLiquid` for cells deep inside a pool. Gas already had that
+skip — but `liftGasPool` was still iterating every cell of the
+pool and running a per-cell cascade (each gas cell swaps with
+the air vacated by the cell above).
+
+For a gas column of length L the cascade does ~2L
+`_writeIdUnchecked` calls + 2L `_markCellChanged` calls. The
+*end state* is just "gas region shifted up by k rows, k upcells
+moved to bottom." So we can collapse the cascade into a bulk
+shift: read the k upcells, copy gas masses up by k rows in a
+single tight loop, write gas to the k cells above the column,
+write air to the k cells below.
+
+### Algorithm
+
+1. Build per-column footprint for the pool's gas: `topRow[x]`,
+   `botRow[x]`, `count[x]`. Track via three module-level
+   `Int32Array` scratches reused across calls.
+2. For each gas column (`count[x] > 0`):
+   - If `top === 0` (pinned at world edge), or the column isn't
+     contiguous (gas + water + gas in same column), or the cell
+     directly above isn't open air — fall through to the per-cell
+     cascade for diagonal-up + lateral-spread handling.
+   - Otherwise, do the bulk shift. `k = 2` if both cells above
+     are air (preserves the v3.1.31 2× rate), else `k = 1`.
+3. Cells from non-shiftable columns run the existing per-cell
+   pass 1 (diagonal try) + pass 2 (lateral spread).
+
+### Cost
+
+For a 50-row gas column the cascade did ~250 reads + ~200
+`_writeIdUnchecked` + ~200 `_markCellChanged`. The polygon path
+does ~6 reads + 50 mass copies + 4 `_writeIdUnchecked` + ~50
+`_markCellChanged` (mostly mass-only). Roughly **50× fewer id
+writes and 4× fewer dirty-set ops per column**.
+
+### Benchmarks (vitest bench, 256×128 world)
+
+| scenario | mean / 30 ticks |
+|----------|-----------------|
+| 5000 cells rising in open air (polygon path active) | ~3.7 ms/tick |
+| 5000 cells pinned at ceiling (per-cell path) | ~4.1 ms/tick |
+| 12000 cells under stone lid (per-cell + lateral spread) | ~8.1 ms/tick |
+
+Gas rising in open air now runs roughly the same speed as a
+pinned pool — the lift cost is no longer proportional to the
+column length.
+
+### Files affected
+
+- `src/core/algorithms/FluidPools.ts` — polygon column shift in
+  `liftGasPool` + cached `Int32Array` column scratches.
+- `tests/perf/CellularAutomaton.bench.ts` — added a "rising in
+  open air" gas scenario so the polygon path is exercised by
+  the benchmark.
+- `docs-dev/PROGRESS.md` — this entry.
+
+### Behavior verified
+
+- 390 unit tests pass; typecheck + lint clean.
+- 3×3 gas blob rises 4 rows in 2 ticks (existing v3.1.31 test).
+- Gas pinned at ceiling still spreads laterally + flattens.
+- Mixed gas/water pools still stratify correctly (polygon shift
+  only kicks in when the upcell is open air; cross-density swaps
+  go through the per-cell path).
+
+---
+
+## v3.1.32 — gas pool throughput (2026-05-03)
+
+User-reported after v3.1.31: "when a lot of gas, fps goes down
+very fast." Three fixes targeting the per-tick cost of running
+detectPools / detectAirBubbles / liftGasPool against a large
+gas pool — none of which change behavior, only cost.
+
+### Fixes
+
+1. **Cached `visited` Uint8Array in `detectAirBubbles`.** The
+   previous per-call `new Uint8Array(W × H)` allocation was
+   the largest GC source in the pool pipeline (~480 kB / tick
+   for the demo bitmap, × 60 fps = ~29 MB/s). Now a module-
+   level scratch array grows monotonically to the largest
+   size seen and `.fill(0, 0, size)` between calls.
+
+2. **Edge-touching air component fast-path.** Once a flood
+   reaches a world-edge cell, the component can't be a bubble
+   — switch to a stripped-down loop that only marks visited
+   and walks neighbors. Skip the `componentCells` push and
+   the bounding-pool tracking. For a typical demo most air is
+   one big edge-connected component covering the bulk of the
+   bitmap, so this drops the dominant per-tick cost.
+
+3. **Skip 8-neighbor wake-up on gas-to-air swaps.** Each
+   `swapWith` previously called `_markCellChanged(true)` for
+   both swapped cells, marking 18 cells active total. Gas
+   movement is handled exclusively by `liftGasPool` (per-cell
+   `stepLiquid` skips gas-in-pool), so waking surrounding
+   gas / air neighbors just inflated the active set without
+   enabling any useful next-tick work. Gas-to-fluid swaps
+   (the rare case) keep the full neighborhood mark for the
+   fluid neighbors that may want to react.
+
+Plus inlining the `[-1, 1] / [1, -1]` two-element arrays in
+the diagonal-up and lateral-spread branches to avoid an
+allocation per stuck cell per tick.
+
+### Benchmarks (vitest bench)
+
+Before / after for the gas-pool stress scenarios:
+
+- 5000 cells pinned at ceiling, 30 ticks: 154 ms → 119 ms (~16% faster).
+- 12000 cells under stone lid, 10 ticks: 89 ms → 81 ms (~9% faster).
+
+### Files affected
+
+- `src/core/algorithms/FluidPools.ts` — visited-scratch cache,
+  edge fast-path, swap wake-neighbor optimization, inlined
+  side-direction arrays.
+- `tests/perf/CellularAutomaton.bench.ts` — added two gas-pool
+  scenarios so future changes can be benchmarked against the
+  reported FPS regression.
+- `docs-dev/PROGRESS.md` — this entry.
+
+### Behavior verified
+
+- 390 unit tests pass; typecheck + lint clean.
+- Gas pools rise + spread + flatten as in v3.1.31; only the
+  per-tick cost moved.
 
 ---
 
