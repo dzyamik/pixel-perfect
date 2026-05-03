@@ -2,7 +2,7 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-03, v3.1.19 enclosed air bubbles rise (backlog item #1 closed)
+> Last updated: 2026-05-03, v3.1.20 gas correctness + drift-eps in transition row (backlog item #3 closed)
 
 ---
 
@@ -41,15 +41,22 @@ later passes can pick the right ones to address:
    pocket (since the cavity contains air not water, the pool
    detection treats it as a separate region). Linked to (1).
 
-3. **Air vs gas at boundaries.** Gas (rank 0) is supposed to
-   rise through air (rank 1) via the existing density swap. The
-   v3.1.17 unified pool does NOT include air — gas pools and
-   surrounding air remain separate. If a gas bubble exits the
-   top of its pool into adjacent air, the per-cell `stepLiquid`
-   handles it (yDir=-1 swap). Verify this still works after
-   v3.1.17 with mixed-fluid containers (gas pool inside water
-   pool, gas should bubble up through water but not commingle
-   with water mass in the pool fast-path).
+3. **Air vs gas at boundaries.** ✅ Closed by `v3.1.20`. Two
+   bugs surfaced when verifying gas behaviour: (a) the multi-
+   fluid transition row in `distributePoolMass` allocated a
+   partial-mass cell for the heavier fluid even when float-drift
+   produced a residual ~1e-7, which stole the cell slot the
+   lighter fluid (gas) needed and leaked its mass; (b) the
+   v3.1.19 air-bubble lift naively swapped any air-below-fluid
+   pair, including gas (rank 0) above an air pocket — gas is
+   LIGHTER than air, so swapping inverted the correct density
+   layering and pulled gas downward each tick. Fixes: gate the
+   transition-row partial-cell on `partialMass > MASS_DRIFT_EPS`
+   (drift discarded so the next-lighter fluid keeps its cell);
+   gate `liftAirBubbles` swaps on `fluidRank(upMat.simulation) >
+   1` so only heavier-than-air fluids lift bubbles. Gas now
+   surfaces from a water pool, pins under a sealed lid, and
+   stratifies above oil + water in mixed-fluid containers.
 
 4. **"Suction" on fluid drainage.** Carving a hole below a
    sealed water column should pull the column down faster than
@@ -125,10 +132,68 @@ fluid-feature passes when relevant.
 | v3.1.17 — unified multi-fluid pools + hydrostatic density sort | ✅ done | `v3.1.17` |
 | v3.1.18 — napalm material (flammable oil) | ✅ done | `v3.1.18` |
 | v3.1.19 — enclosed air bubbles rise + pop at surface | ✅ done | `v3.1.19` |
+| v3.1.20 — gas correctness in unified pool + transition-row drift | ✅ done | `v3.1.20` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 | v3.2.x — air handling (remaining backlog items) | ⬜ backlog | — |
 
 Test suite: 381 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.20 — gas correctness in unified pool + transition-row drift (2026-05-03)
+
+Closes the third item in the air-iteration backlog. Fixes two
+related bugs that emerged when verifying gas behaviour with
+v3.1.17 unified pools and v3.1.19 bubble lift.
+
+### Bugs
+
+1. **Transition-row partial-cell stole the lighter fluid's slot.**
+   With water mass = 79.0000000596 (float drift), the multi-fluid
+   transition row in `distributePoolMass` computed
+   `fullCells = 7`, `partialMass = 0.0000000596`. The `partialMass
+   > 0` check fired, and the algorithm placed a partial-water cell
+   in the slot meant for the next fluid (gas) — leaving gas with
+   no cell to allocate to and leaking 1.0 of gas mass into the
+   leftover branch.
+
+2. **Bubble lift swapped gas downward.** `liftAirBubbles` checked
+   only that the up cell's pool id matched and that the up cell
+   was non-air; it swapped indiscriminately. For an air pocket
+   directly below gas (rank 0, lighter than air rank 1), the swap
+   put gas BELOW air — inverted density layering. Each tick the
+   gas migrated downward.
+
+### Fix
+
+Both gated on the same `MASS_DRIFT_EPS` / density-rank checks the
+v3.1.17 fixes used for water-vs-oil:
+
+- `partialMass > MASS_DRIFT_EPS && cellsAssigned < rowCellCount`
+  in the multi-fluid transition branch.
+- `fluidRank(upMat.simulation) > 1` (air rank) in `liftAirBubbles`
+  before swapping. `liftAirBubblesAll` now takes a
+  `MaterialRegistry` so it can look up the up-cell's simulation
+  type.
+
+### Files affected
+
+- `src/core/algorithms/FluidPools.ts` — both checks; signature
+  change on `liftAirBubblesAll`.
+- `src/core/algorithms/CellularAutomaton.ts` — pass `materials`
+  through to `liftAirBubblesAll`.
+- `tests/core/algorithms/CellularAutomaton.test.ts` — two new
+  gas regression tests (open-top surfacing, sealed-top pinning).
+
+### Behavior verified
+
+- Gas bubble in a water pool surfaces and spreads at row 0.
+- Gas trapped under a sealed lid pins at the top water row
+  (single cell, doesn't migrate downward).
+- Mixed water + oil + gas pool sorts cleanly: gas at top, oil
+  in middle, water at bottom (with a small transition-row
+  artifact when masses don't divide evenly into rows).
+- 386 unit tests pass; typecheck + lint clean.
 
 ---
 

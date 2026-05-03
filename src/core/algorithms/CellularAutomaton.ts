@@ -178,7 +178,7 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
         // after distribute so the swapped-down fluid cell carries
         // its post-distribute mass; updates poolIds in place so the
         // per-cell loop below sees a consistent sidecar.
-        liftAirBubblesAll(bitmap, pools);
+        liftAirBubblesAll(bitmap, pools, materials);
         poolIds = bitmap._getPoolIdsUnchecked();
     }
 

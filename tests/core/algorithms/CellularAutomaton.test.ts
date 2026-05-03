@@ -1807,6 +1807,78 @@ describe('CellularAutomaton.step — enclosed air bubbles rise (v3.1.19)', () =>
     });
 });
 
+describe('CellularAutomaton.step — gas in unified pools (v3.1.20)', () => {
+    // v3.1.20: gas (rank 0, lighter than air rank 1) is part of the
+    // unified multi-fluid pool sort, so a gas bubble in water rises
+    // to the surface within ticks of pool detection rather than the
+    // per-cell stepLiquid rate. The v3.1.19 air-bubble lift skips
+    // any swap where the up cell is lighter than air, so a gas-
+    // above-air-bubble configuration (correct density layering) is
+    // preserved instead of inverted.
+
+    it('gas bubble inside water surfaces and exits to open air', () => {
+        const W = 10;
+        const H = 12;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [water, gas, stone],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        for (let y = 0; y < H; y++) {
+            bm.setPixel(0, y, stone.id);
+            bm.setPixel(W - 1, y, stone.id);
+        }
+        for (let y = 4; y < H - 1; y++) {
+            for (let x = 1; x < W - 1; x++) bm.setPixel(x, y, water.id);
+        }
+        bm.setPixel(4, H - 3, gas.id);
+        bm.setPixel(5, H - 3, gas.id);
+        for (let t = 0; t < 12; t++) CellularAutomaton.step(bm, t);
+        // Gas should have escaped to row 0 (spread across the top).
+        let gasAtTop = 0;
+        for (let x = 1; x < W - 1; x++) {
+            if (bm.getPixel(x, 0) === gas.id) gasAtTop += 1;
+        }
+        expect(gasAtTop).toBeGreaterThanOrEqual(2);
+    });
+
+    it('gas under sealed lid stays pinned at top water row', () => {
+        const W = 10;
+        const H = 12;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [water, gas, stone],
+        });
+        for (let x = 0; x < W; x++) {
+            bm.setPixel(x, 0, stone.id);
+            bm.setPixel(x, H - 1, stone.id);
+        }
+        for (let y = 0; y < H; y++) {
+            bm.setPixel(0, y, stone.id);
+            bm.setPixel(W - 1, y, stone.id);
+        }
+        for (let y = 1; y < H - 1; y++) {
+            for (let x = 1; x < W - 1; x++) bm.setPixel(x, y, water.id);
+        }
+        bm.setPixel(4, 9, gas.id);
+        for (let t = 0; t < 30; t++) CellularAutomaton.step(bm, t);
+        // Gas should be at row 1 (top of pool, just under the lid).
+        // No gas anywhere else.
+        let gasAtTopRow = 0;
+        let gasElsewhere = 0;
+        for (let y = 1; y < H - 1; y++) {
+            for (let x = 1; x < W - 1; x++) {
+                if (bm.getPixel(x, y) === gas.id) {
+                    if (y === 1) gasAtTopRow += 1;
+                    else gasElsewhere += 1;
+                }
+            }
+        }
+        expect(gasAtTopRow).toBeGreaterThanOrEqual(1);
+        expect(gasElsewhere).toBe(0);
+    });
+});
+
 describe('CellularAutomaton.step — fluid past fall column (v3.1.2)', () => {
     // v3.1.2: a vertical fall column (water pouring off a cliff
     // edge) used to act as a "wall" for water flowing past at the

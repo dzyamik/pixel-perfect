@@ -299,14 +299,20 @@ export function distributePoolMass(
             } else {
                 // Multi-fluid transition row: allocate whole cells
                 // saturated for activeId, then loop continues with
-                // the next fluid for the remaining cells.
+                // the next fluid for the remaining cells. Float-
+                // drift `partialMass` (below `MASS_DRIFT_EPS`) is
+                // discarded rather than allocated to a cell —
+                // otherwise a residual ~1e-7 of the heavier fluid
+                // takes the cell slot the lighter fluid needs and
+                // its mass leaks into the post-loop leftover branch
+                // which has no air-id cell to credit.
                 const fullCells = Math.floor(remainingForActive / MAX_POOL_MASS_PER_CELL);
                 const partialMass = remainingForActive - fullCells * MAX_POOL_MASS_PER_CELL;
                 for (let i = 0; i < fullCells; i++) {
                     assignCell(rowCells[cellsAssigned + i]!, activeId, MAX_POOL_MASS_PER_CELL);
                 }
                 cellsAssigned += fullCells;
-                if (partialMass > 0 && cellsAssigned < rowCellCount) {
+                if (partialMass > MASS_DRIFT_EPS && cellsAssigned < rowCellCount) {
                     assignCell(rowCells[cellsAssigned]!, activeId, partialMass);
                     cellsAssigned += 1;
                 }
@@ -653,14 +659,14 @@ function liftAirBubbles(
     bitmap: ChunkedBitmap,
     pool: FluidPool,
     poolIds: Uint16Array,
+    materials: MaterialRegistry,
 ): void {
     if (pool.airCells.size === 0) return;
     const W = bitmap.width;
     const masses = bitmap._getMassArrayUnchecked();
 
     // Process top-first so a contiguous vertical bubble rises as a
-    // unit. Each iteration swaps with the cell directly above; we
-    // update poolIds in place so within-pass propagation works.
+    // unit. Each iteration swaps with the cell directly above.
     const sorted = [...pool.airCells].sort((a, b) => a - b);
 
     for (const idx of sorted) {
@@ -671,6 +677,14 @@ function liftAirBubbles(
         if (poolIds[upIdx] !== pool.id) continue;
         const upId = bitmap._readIdUnchecked(x, y - 1);
         if (upId === 0) continue;
+        // Only lift when the up cell is HEAVIER than air. Gas (rank 0)
+        // is lighter than air (rank 1) — air below gas is the correct
+        // density layering, swapping them sinks the gas. Water and oil
+        // are heavier; air bubbles below them rise normally.
+        const upMat = materials.get(upId);
+        if (upMat === undefined) continue;
+        const upRank = fluidRank(upMat.simulation ?? 'static');
+        if (upRank <= 1) continue; // 1 = air rank; gas at 0 is lighter
         const upMass = masses[upIdx]!;
         // Swap. Up cell: fluid → air (id 0, mass 0).
         // This cell: air → fluid (with the up cell's id and mass).
@@ -698,9 +712,10 @@ function liftAirBubbles(
 export function liftAirBubblesAll(
     bitmap: ChunkedBitmap,
     pools: Map<number, FluidPool>,
+    materials: MaterialRegistry,
 ): void {
     const poolIds = bitmap._getPoolIdsUnchecked();
     for (const pool of pools.values()) {
-        liftAirBubbles(bitmap, pool, poolIds);
+        liftAirBubbles(bitmap, pool, poolIds, materials);
     }
 }
