@@ -61,6 +61,16 @@ export interface FluidPool {
      */
     readonly cells: Set<number>;
     /**
+     * Enclosed-air-bubble cells associated with this pool (v3.1.19).
+     * Air cells whose flood-fill component does NOT touch the world
+     * edge AND whose bounding non-air neighbors are all static or
+     * fluid (any pool). Each tick's `liftAirBubbles` pass swaps each
+     * bubble cell with the fluid cell directly above, raising the
+     * bubble one row per tick until it surfaces. Empty for pools
+     * without trapped air.
+     */
+    readonly airCells: Set<number>;
+    /**
      * Sum of cell masses across the pool, across all materials.
      * Updated when cells are added / removed and during the
      * equilibrium pass.
@@ -475,11 +485,222 @@ export function detectPools(
                 id: poolId,
                 materialMass,
                 cells,
+                airCells: new Set<number>(),
                 totalMass,
                 dirty: false,
             });
         }
     }
 
+    // v3.1.19: second pass — flood-fill air components and classify
+    // each as enclosed-or-not. An enclosed component touches no
+    // world edge AND every bounding non-air cell is either static
+    // or in some fluid pool. Enclosed components attach to the
+    // smallest-id pool they bound (so a single bubble pinned by
+    // multiple pools becomes one of them; doesn't matter much for
+    // demo cases since the unified-pool flood-fill already merges
+    // any 4-connected fluid).
+    detectAirBubbles(bitmap, poolIds, out);
+
     return out;
+}
+
+/**
+ * Finds enclosed air components in the bitmap and assigns them to
+ * the appropriate fluid pool's `airCells` set.
+ *
+ * Run AFTER fluid pool flood fill has populated `poolIds`. Iterates
+ * the bitmap once, flood-filling each unvisited air cell. Tracks
+ * whether the component touches the world edge and which fluid pool
+ * ids bound it. Components that don't touch any edge AND have at
+ * least one bounding fluid pool count as "enclosed bubbles" and are
+ * appended to one of those pools.
+ *
+ * Cost: O(N) over air cells per call. Cheap relative to fluid pool
+ * detection in typical scenes (most air is open air = one big
+ * non-enclosed component).
+ */
+function detectAirBubbles(
+    bitmap: ChunkedBitmap,
+    poolIds: Uint16Array,
+    pools: Map<number, FluidPool>,
+): void {
+    const W = bitmap.width;
+    const H = bitmap.height;
+    const visited = new Uint8Array(W * H);
+    const stack: number[] = [];
+    const componentCells: number[] = [];
+
+    for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+            const startIdx = y * W + x;
+            if (visited[startIdx]) continue;
+            if (bitmap._readIdUnchecked(x, y) !== 0) continue;
+
+            let touchesEdge = false;
+            let smallestPoolId = NO_POOL;
+            componentCells.length = 0;
+            stack.length = 0;
+            stack.push(startIdx);
+            visited[startIdx] = 1;
+
+            while (stack.length > 0) {
+                const fi = stack.pop()!;
+                componentCells.push(fi);
+                const cy = (fi / W) | 0;
+                const cx = fi - cy * W;
+                if (cx === 0 || cx === W - 1 || cy === 0 || cy === H - 1) {
+                    touchesEdge = true;
+                }
+                // 4-connected neighbors.
+                if (cx > 0) {
+                    const ni = fi - 1;
+                    const nid = bitmap._readIdUnchecked(cx - 1, cy);
+                    if (nid === 0) {
+                        if (!visited[ni]) {
+                            visited[ni] = 1;
+                            stack.push(ni);
+                        }
+                    } else {
+                        const pid = poolIds[ni]!;
+                        if (pid !== NO_POOL && pid < smallestPoolId) smallestPoolId = pid;
+                    }
+                }
+                if (cx + 1 < W) {
+                    const ni = fi + 1;
+                    const nid = bitmap._readIdUnchecked(cx + 1, cy);
+                    if (nid === 0) {
+                        if (!visited[ni]) {
+                            visited[ni] = 1;
+                            stack.push(ni);
+                        }
+                    } else {
+                        const pid = poolIds[ni]!;
+                        if (pid !== NO_POOL && pid < smallestPoolId) smallestPoolId = pid;
+                    }
+                }
+                if (cy > 0) {
+                    const ni = fi - W;
+                    const nid = bitmap._readIdUnchecked(cx, cy - 1);
+                    if (nid === 0) {
+                        if (!visited[ni]) {
+                            visited[ni] = 1;
+                            stack.push(ni);
+                        }
+                    } else {
+                        const pid = poolIds[ni]!;
+                        if (pid !== NO_POOL && pid < smallestPoolId) smallestPoolId = pid;
+                    }
+                }
+                if (cy + 1 < H) {
+                    const ni = fi + W;
+                    const nid = bitmap._readIdUnchecked(cx, cy + 1);
+                    if (nid === 0) {
+                        if (!visited[ni]) {
+                            visited[ni] = 1;
+                            stack.push(ni);
+                        }
+                    } else {
+                        const pid = poolIds[ni]!;
+                        if (pid !== NO_POOL && pid < smallestPoolId) smallestPoolId = pid;
+                    }
+                }
+            }
+
+            if (touchesEdge) continue;
+            if (smallestPoolId === NO_POOL) continue; // sealed cavity, no pool
+            const pool = pools.get(smallestPoolId);
+            if (pool === undefined) continue;
+            for (const ci of componentCells) {
+                pool.airCells.add(ci);
+                // Tag the bubble cell with the bounding pool's id in
+                // the sidecar so `stepLiquid` knows not to flow water
+                // into it. Without this tag, lateral / vertical
+                // donations from adjacent pool fluid cells fill the
+                // bubble within one tick (CA fluids treat any air
+                // cell as available drainage space, regardless of
+                // enclosure). The tag overlaps with fluid pool ids
+                // for the same pool — `isPoolInterior` consumers must
+                // continue to gate on `bitmap.getPixel(x, y) !== 0`
+                // before treating a poolId as a fluid pool member.
+                poolIds[ci] = smallestPoolId;
+            }
+        }
+    }
+}
+
+/**
+ * Lifts each enclosed air-bubble cell one row by swapping it with
+ * the fluid pool cell directly above (v3.1.19). Run once per pool
+ * per tick, AFTER `distributePoolMass` so the swapped fluid cell
+ * carries its post-distribute mass.
+ *
+ * Order: bubble cells are processed top-first (y ascending). When
+ * a 2+ cell tall bubble is processed, the top cell rises into a
+ * fluid; the algorithm then promotes the just-vacated position to
+ * a pool member (poolIds + id), which lets the next bubble cell
+ * down see a valid fluid above and rise into it. Without that
+ * within-pass promotion, a tall bubble would tear apart vertically
+ * (top cell rises, lower cells block on the now-air-but-stale-
+ * poolIds gap) and split into singletons.
+ *
+ * Mass and id are swapped 1:1 between the two cells. Pool ids in
+ * the sidecar are updated in place so subsequent iterations of the
+ * SAME pass see the consistent state. The next tick's
+ * `detectPools` will rebuild from the bitmap regardless.
+ */
+function liftAirBubbles(
+    bitmap: ChunkedBitmap,
+    pool: FluidPool,
+    poolIds: Uint16Array,
+): void {
+    if (pool.airCells.size === 0) return;
+    const W = bitmap.width;
+    const masses = bitmap._getMassArrayUnchecked();
+
+    // Process top-first so a contiguous vertical bubble rises as a
+    // unit. Each iteration swaps with the cell directly above; we
+    // update poolIds in place so within-pass propagation works.
+    const sorted = [...pool.airCells].sort((a, b) => a - b);
+
+    for (const idx of sorted) {
+        const y = (idx / W) | 0;
+        if (y === 0) continue;
+        const x = idx - y * W;
+        const upIdx = idx - W;
+        if (poolIds[upIdx] !== pool.id) continue;
+        const upId = bitmap._readIdUnchecked(x, y - 1);
+        if (upId === 0) continue;
+        const upMass = masses[upIdx]!;
+        // Swap. Up cell: fluid → air (id 0, mass 0).
+        // This cell: air → fluid (with the up cell's id and mass).
+        // poolIds for both cells stay at pool.id — the swap exchanges
+        // fluid/bubble roles within the same pool. Per-cell loop's
+        // `isPoolInterior` correctly treats both cells as pool members
+        // (the air bubble + fluid neighbors share the pool tag), so
+        // adjacent water cells stay interior and skip stepLiquid,
+        // preventing them from filling the new bubble position via
+        // lateral / vertical donation.
+        bitmap._writeIdUnchecked(x, y - 1, 0);
+        masses[upIdx] = 0;
+        bitmap._markCellChanged(x, y - 1, true);
+        bitmap._writeIdUnchecked(x, y, upId);
+        masses[idx] = upMass;
+        bitmap._markCellChanged(x, y, true);
+    }
+}
+
+/**
+ * Public entry point invoked by the cellular automaton step. Runs
+ * the bubble-rise pass for every detected pool. Callers pass the
+ * current `poolIds` sidecar (already populated by `detectPools`).
+ */
+export function liftAirBubblesAll(
+    bitmap: ChunkedBitmap,
+    pools: Map<number, FluidPool>,
+): void {
+    const poolIds = bitmap._getPoolIdsUnchecked();
+    for (const pool of pools.values()) {
+        liftAirBubbles(bitmap, pool, poolIds);
+    }
 }

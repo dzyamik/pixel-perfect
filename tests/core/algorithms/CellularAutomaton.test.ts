@@ -1698,6 +1698,115 @@ describe('CellularAutomaton.step — oil surfaces and flattens on water (v3.1.17
     });
 });
 
+describe('CellularAutomaton.step — enclosed air bubbles rise (v3.1.19)', () => {
+    // Pre-v3.1.19, an air pocket carved inside a settled water
+    // pool was either filled by lateral water donation in one tick
+    // or sat permanently because there was no air-rises-through-
+    // water rule. v3.1.19 detects 4-connected air components
+    // bounded entirely by static + fluid (any pool) as enclosed
+    // bubbles, tags their cells in the pool-id sidecar, blocks
+    // per-cell donations into them, and lifts each bubble cell one
+    // row per tick by swapping with the fluid pool cell directly
+    // above. Bubbles surface at an open-air boundary and pop;
+    // sealed-top containers trap them at the top row.
+
+    it('enclosed bubble in open-top water rises and pops at the surface', () => {
+        const W = 10;
+        const H = 12;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [water, stone],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        for (let y = 0; y < H; y++) {
+            bm.setPixel(0, y, stone.id);
+            bm.setPixel(W - 1, y, stone.id);
+        }
+        // Water fills rows 1..H-2; row 0 is open (air outside walls).
+        for (let y = 1; y < H - 1; y++) {
+            for (let x = 1; x < W - 1; x++) bm.setPixel(x, y, water.id);
+        }
+        // Carve a 1-cell bubble at row H-3 (deep).
+        bm.setPixel(4, H - 3, 0);
+        const bubbleStartY = H - 3;
+        // Run enough ticks for the bubble to rise to the surface
+        // (~ bubbleStartY rows × 1 row/tick). Add slack.
+        for (let t = 0; t < bubbleStartY + 5; t++) CellularAutomaton.step(bm, t);
+        // Bubble should have surfaced — every cell in column 4
+        // from rows 1..H-2 is water again (or the surface row may
+        // be slightly under-mass but binary-renders as water).
+        for (let y = 1; y < H - 1; y++) {
+            expect(bm.getPixel(4, y)).toBe(water.id);
+        }
+    });
+
+    it('enclosed bubble in sealed-top container persists at the top row', () => {
+        const W = 10;
+        const H = 12;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [water, stone],
+        });
+        // Sealed lid: stone at row 0 across the entire width.
+        for (let x = 0; x < W; x++) {
+            bm.setPixel(x, 0, stone.id);
+            bm.setPixel(x, H - 1, stone.id);
+        }
+        for (let y = 0; y < H; y++) {
+            bm.setPixel(0, y, stone.id);
+            bm.setPixel(W - 1, y, stone.id);
+        }
+        for (let y = 1; y < H - 1; y++) {
+            for (let x = 1; x < W - 1; x++) bm.setPixel(x, y, water.id);
+        }
+        // 2-cell bubble at row 8.
+        bm.setPixel(4, 8, 0);
+        bm.setPixel(5, 8, 0);
+        // Run more than enough ticks for the bubble to reach the
+        // top row (1) and stop there.
+        for (let t = 0; t < 30; t++) CellularAutomaton.step(bm, t);
+        // Bubble cells trapped under the lid: row 1 should still
+        // hold the air bubble (cells (4, 1) and (5, 1)). All other
+        // cells in row 1 are water.
+        expect(bm.getPixel(4, 1)).toBe(0);
+        expect(bm.getPixel(5, 1)).toBe(0);
+        for (const x of [1, 2, 3, 6, 7, 8]) {
+            expect(bm.getPixel(x, 1)).toBe(water.id);
+        }
+    });
+
+    it('vertical 2-cell bubble rises as a unit (no vertical tearing)', () => {
+        const W = 8;
+        const H = 14;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [water, stone],
+        });
+        for (let x = 0; x < W; x++) {
+            bm.setPixel(x, 0, stone.id);
+            bm.setPixel(x, H - 1, stone.id);
+        }
+        for (let y = 0; y < H; y++) {
+            bm.setPixel(0, y, stone.id);
+            bm.setPixel(W - 1, y, stone.id);
+        }
+        for (let y = 1; y < H - 1; y++) {
+            for (let x = 1; x < W - 1; x++) bm.setPixel(x, y, water.id);
+        }
+        // Vertical 2-cell bubble at (3, 10) and (3, 11).
+        bm.setPixel(3, 10, 0);
+        bm.setPixel(3, 11, 0);
+        // After 3 ticks, bubble should be at (3, 7), (3, 8) — both
+        // cells of the bubble rose 3 rows together.
+        for (let t = 0; t < 3; t++) CellularAutomaton.step(bm, t);
+        expect(bm.getPixel(3, 7)).toBe(0);
+        expect(bm.getPixel(3, 8)).toBe(0);
+        // The cells the bubble vacated should now be water.
+        expect(bm.getPixel(3, 10)).toBe(water.id);
+        expect(bm.getPixel(3, 11)).toBe(water.id);
+    });
+});
+
 describe('CellularAutomaton.step — fluid past fall column (v3.1.2)', () => {
     // v3.1.2: a vertical fall column (water pouring off a cliff
     // edge) used to act as a "wall" for water flowing past at the

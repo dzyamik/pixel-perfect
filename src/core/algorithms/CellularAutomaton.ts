@@ -5,6 +5,7 @@ import {
     detectPools,
     distributePoolMass,
     isPoolInterior,
+    liftAirBubblesAll,
     NO_POOL,
 } from './FluidPools.js';
 
@@ -173,6 +174,11 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
                 distributePoolMass(bitmap, pool, materials);
             }
         }
+        // v3.1.19: enclosed air bubbles rise one row per tick. Runs
+        // after distribute so the swapped-down fluid cell carries
+        // its post-distribute mass; updates poolIds in place so the
+        // per-cell loop below sees a consistent sidecar.
+        liftAirBubblesAll(bitmap, pools);
         poolIds = bitmap._getPoolIdsUnchecked();
     }
 
@@ -202,11 +208,11 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
         if (kind === 'sand') {
             stepSand(bitmap, materials, x, y, id, W, H, goRight, movedThisTick);
         } else if (kind === 'water') {
-            stepLiquid(bitmap, materials, x, y, id, W, H, +1, RANK_WATER, lateralReach, sxFlip);
+            stepLiquid(bitmap, materials, x, y, id, W, H, +1, RANK_WATER, lateralReach, sxFlip, poolIds);
         } else if (kind === 'oil') {
-            stepLiquid(bitmap, materials, x, y, id, W, H, +1, RANK_OIL, lateralReach, sxFlip);
+            stepLiquid(bitmap, materials, x, y, id, W, H, +1, RANK_OIL, lateralReach, sxFlip, poolIds);
         } else if (kind === 'gas') {
-            stepLiquid(bitmap, materials, x, y, id, W, H, -1, RANK_GAS, lateralReach, sxFlip);
+            stepLiquid(bitmap, materials, x, y, id, W, H, -1, RANK_GAS, lateralReach, sxFlip, poolIds);
         } else if (kind === 'fire') {
             stepFire(bitmap, materials, x, y, id, material, W, H, movedThisTick);
         }
@@ -387,7 +393,17 @@ function stepLiquid(
     srcRank: number,
     lateralReach: number,
     sxFlip: number,
+    poolIds: Uint16Array | null,
 ): void {
+    // v3.1.19: when `poolIds` is non-null, an air target with
+    // `poolIds[idx] !== NO_POOL` is an enclosed-bubble cell. Per-cell
+    // donations (lateral or vertical) into bubble cells are blocked
+    // so the bubble persists until `liftAirBubblesAll` raises it.
+    // Without this, surface-row water cells (whose stone lid forces
+    // them to be perimeter) donate water into a bubble at the top
+    // of the pool within one tick.
+    const isBubbleAt = (cellIdx: number): boolean =>
+        poolIds !== null && poolIds[cellIdx] !== NO_POOL;
     // v3.0.3 perf: cache the mass array reference and use direct
     // index access. setMass(...) does ~30 lookups + bookkeeping
     // calls per stepLiquid call; with 25k+ active cells per tick
@@ -432,6 +448,9 @@ function stepLiquid(
                 bitmap._markCellChanged(x, y, true);
                 return;
             }
+        } else if (targetId === 0 && isBubbleAt(idxNy)) {
+            // Don't fill enclosed bubbles. The bubble cell will be
+            // raised by `liftAirBubblesAll` instead of consumed.
         } else {
             // Air or same-material at deep: mass transfer toward
             // stable split.
@@ -534,6 +553,15 @@ function stepLiquid(
             //       symmetric between left- and right-cliff
             //       scenarios.
             if (targetId === 0) {
+                // v3.1.19: don't laterally donate into an enclosed
+                // air bubble. Bubbles are raised by
+                // `liftAirBubblesAll`; treating them as drainage
+                // space lets a single perimeter water cell collapse
+                // a bubble in one tick.
+                if (isBubbleAt(idxNx)) {
+                    if (sx === -1) leftDone = true; else rightDone = true;
+                    continue;
+                }
                 const tny = y + yDir;
                 if (tny >= 0 && tny < H
                     && bitmap._readIdUnchecked(nx, tny) === 0) {

@@ -477,10 +477,16 @@ and the `v3.1.x` patch chain through `v3.1.16` (cliff drainage
 hydrostatics: pool flood-fill every tick, bottom-up hydrostatic
 distribution, narrow-stream-from-anchored-edge rule, width-from-
 depth Bernoulli discretization, and L/R scan-order ping-pong for
-symmetric drainage) and `v3.1.17` (unified multi-fluid pools:
+symmetric drainage), `v3.1.17` (unified multi-fluid pools:
 4-connected fluid cells of any id share one pool, distribute
 sorts cells by density rank so oil rises through water and a
-water chimney through oil heals within a tick of pool detection).
+water chimney through oil heals within a tick of pool detection),
+`v3.1.18` (napalm — flammable oil demo material) and
+`v3.1.19` (enclosed air bubbles: fully-bounded air pockets are
+tagged in the pool-id sidecar so per-cell donations don't fill
+them; a per-tick lift pass swaps each bubble cell with the
+fluid cell directly above, so bubbles rise one row per tick
+and pop at the first open-air boundary).
 v3 details in `docs-dev/06-v3-mass-based-fluid.md`,
 `docs-dev/07-v3.1-pool-based-fluid.md`, and the running ledger in
 `docs-dev/PROGRESS.md`.

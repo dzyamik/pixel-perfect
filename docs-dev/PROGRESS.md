@@ -2,7 +2,7 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-03, v3.1.18 napalm material + air-iteration backlog
+> Last updated: 2026-05-03, v3.1.19 enclosed air bubbles rise (backlog item #1 closed)
 
 ---
 
@@ -20,15 +20,18 @@ case (water falls through air, oil floats on top of water) but
 several scenarios reveal missing behaviour. Capture them here so
 later passes can pick the right ones to address:
 
-1. **Trapped air pockets inside fluid bodies.** Carve a small
-   air bubble in the middle of a settled water pool. The bubble
-   stays put — water above doesn't fall in to displace it
-   because there's no air-rises-through-water rule. Real physics
-   wants the bubble to migrate upward and exit. Candidate fix:
-   treat air as a virtual rank-1.5 (lighter than oil rank 3,
-   heavier than gas rank 0) for pool-detection purposes ONLY if
-   it is fully enclosed by fluid cells, and let
-   `distributePoolMass` swap it to the top of the connected body.
+1. **Trapped air pockets inside fluid bodies.** ✅ Closed by
+   `v3.1.19` — `detectAirBubbles` flood-fills 4-connected air
+   components after fluid pools are detected, classifies each as
+   enclosed-or-not (touches no world edge AND every bounding
+   non-air cell is static or in some fluid pool), tags enclosed
+   cells in the pool-id sidecar, and `liftAirBubblesAll` swaps
+   each bubble cell with the fluid cell directly above (1 row /
+   tick). `stepLiquid` checks the pool-id tag on lateral and
+   vertical air targets and skips donations into bubbles, so
+   surface-row water cells with a stone lid don't collapse a
+   bubble in one tick. Bubbles surface at an open-air boundary
+   and pop; sealed-top containers trap them at the top row.
 
 2. **Air displacement when fluid falls into a sealed cavity.**
    Pour water into a closed-top container with an air-filled
@@ -121,10 +124,77 @@ fluid-feature passes when relevant.
 | v3.1.16 — within-row x-order ping-pong | ✅ done | `v3.1.16` |
 | v3.1.17 — unified multi-fluid pools + hydrostatic density sort | ✅ done | `v3.1.17` |
 | v3.1.18 — napalm material (flammable oil) | ✅ done | `v3.1.18` |
+| v3.1.19 — enclosed air bubbles rise + pop at surface | ✅ done | `v3.1.19` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
-| v3.2.x — air handling (trapped pockets, displacement, etc.) | ⬜ backlog | — |
+| v3.2.x — air handling (remaining backlog items) | ⬜ backlog | — |
 
 Test suite: 381 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.19 — enclosed air bubbles rise + pop at surface (2026-05-03)
+
+Closes the first item in the air-iteration backlog. Air pockets
+trapped inside a fluid body now migrate to the top of the
+connected pool one row per tick, then pop at any open-air
+boundary. Sealed-top containers leave the bubble pinned under
+the lid (correct for "no path out").
+
+### Mechanism
+
+`FluidPool` gains an `airCells: Set<number>` field.
+`detectPools` runs a second pass (`detectAirBubbles`) after
+fluid pool flood fill: it flood-fills each 4-connected air
+component, classifies it as enclosed iff (a) no cell touches
+the world edge AND (b) at least one bounding non-air cell sits
+in a fluid pool, and adds the component's cells to the
+smallest-id pool that bounds it. Enclosed bubble cells are
+tagged in the pool-id sidecar with the bounding pool's id —
+the same tag fluid pool members carry — so consumers must
+continue to gate on `bitmap.getPixel(x, y) !== 0` before
+treating a tagged cell as a fluid pool member.
+
+The new `liftAirBubblesAll` function is invoked after
+`distributePoolMass`. For each pool, it sorts `airCells` by
+flat index ascending (top first by y) and, for each bubble
+cell, swaps with the fluid pool cell directly above. The swap
+is mass + id symmetric: the up cell becomes air (id 0, mass
+0); this cell becomes fluid carrying the up cell's id and
+mass. The pool-id sidecar tags both cells the same (pool.id),
+so a contiguous vertical bubble rises as a unit (top cell
+swaps first, the swapped fluid below acts as the up cell for
+the next bubble cell down).
+
+`stepLiquid` gains a `poolIds: Uint16Array | null` parameter.
+When the lateral or vertical target is air AND its pool-id
+sidecar entry is non-`NO_POOL`, the donation is skipped — the
+target is an enclosed bubble and would otherwise be filled by
+surface-row water cells (which have a stone lid above making
+them perimeter / non-interior, so they always run
+`stepLiquid`).
+
+### Files affected
+
+- `src/core/algorithms/FluidPools.ts` — `airCells` field,
+  `detectAirBubbles`, `liftAirBubbles`, `liftAirBubblesAll`.
+- `src/core/algorithms/CellularAutomaton.ts` —
+  `liftAirBubblesAll` call after `distributePoolMass`,
+  `poolIds` plumbed into `stepLiquid`, `isBubbleAt` helper to
+  block donations into tagged air cells.
+- `tests/core/algorithms/CellularAutomaton.test.ts` — three
+  new tests: open-top bubble surfaces and pops, sealed-top
+  bubble persists at lid, vertical 2-cell bubble rises as a
+  unit.
+
+### Behavior verified
+
+- Bubble in open-top water rises ~1 row/tick, pops at the
+  surface, leaves no visible defect (mass conserved; pool's
+  top row settles to slightly under-saturated mass).
+- Bubble in sealed container rises and pins at the top row
+  under the lid.
+- Multi-cell vertical bubbles rise as a unit (no tearing).
+- 384 unit tests pass; typecheck + lint clean.
 
 ---
 
