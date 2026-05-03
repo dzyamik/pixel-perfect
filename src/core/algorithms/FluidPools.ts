@@ -845,6 +845,7 @@ function liftGasPool(
         // poolIds[idx] stays at pool.id (kept tagged).
     };
 
+    void H;
     for (const idx of gasCells) {
         const y = (idx / W) | 0;
         const x = idx - y * W;
@@ -852,49 +853,46 @@ function liftGasPool(
         // pass (cascade chain). Skip if no longer gas.
         const id = bitmap._readIdUnchecked(x, y);
         if (id === 0) continue;
-        // v3.1.30: gas at the world's top edge with same-gas
-        // pressure from below escapes the simulation. Without
-        // this, a sustained gas pour piles cells at row 0
-        // indefinitely — every tick more gas arrives from below
-        // and the lift has nowhere to lift the topmost row to.
-        // Mass conservation is intentionally broken (gas leaves
-        // the world). Single gas cells or non-gas-below cases
-        // (e.g., a gas bubble that just reached the surface
-        // above water) are left alone, so isolated gas at the
-        // ceiling persists.
-        if (y === 0) {
-            // Pressure check: only evaporate when gas below is
-            // pushing up.
-            const belowId = y + 1 < H
-                ? bitmap._readIdUnchecked(x, y + 1)
-                : 0;
-            if (belowId === id) {
-                bitmap._writeIdUnchecked(x, y, 0);
-                masses[idx] = 0;
-                bitmap._markCellChanged(x, y, true);
-                poolIds[idx] = NO_POOL;
-                // Wake the cell directly below so the gas-pool
-                // detection sees the new top boundary next tick.
-                bitmap._markCellChanged(x, y + 1, false);
-            }
-            continue;
-        }
-        // First try straight up.
-        if (canSwapInto(x, y - 1, id)) {
+        // 1. Try straight up.
+        if (y > 0 && canSwapInto(x, y - 1, id)) {
             swapWith(x, y, x, y - 1, idx, id);
             continue;
         }
-        // v3.1.29: blocked by static / same-gas above. Try diagonal
-        // up-left and up-right so the gas can slide around an
-        // overhang or angled wall (the demo 09 funnel narrows as
-        // gas rises, edge cells would otherwise pin against the
-        // angled stone walls indefinitely). Alternate the side
-        // tried first by row parity for L/R symmetry.
+        // 2. v3.1.29 — diagonal up. Lets gas slide around an
+        //    overhang or angled wall. Alternate the side tried
+        //    first by row parity for L/R symmetry.
         const tryLeftFirst = (y & 1) === 0;
         const sides = tryLeftFirst ? [-1, 1] : [1, -1];
+        if (y > 0) {
+            let movedDiag = false;
+            for (const sx of sides) {
+                if (canSwapInto(x + sx, y - 1, id)) {
+                    swapWith(x, y, x + sx, y - 1, idx, id);
+                    movedDiag = true;
+                    break;
+                }
+            }
+            if (movedDiag) continue;
+        }
+        // 3. v3.1.30 — lateral spread. Gas at the ceiling (row 0
+        //    or under stone) flattens its surface against the
+        //    barrier. Gas pools then accumulate top-down: row 0
+        //    fills laterally, then row 1, etc. Without this gas
+        //    formed a vertical chimney at the brush position
+        //    (each cell pinned because nothing above moved).
+        //
+        //    Spread only when there's same-gas on the OPPOSITE
+        //    side — this ensures isolated gas cells don't
+        //    oscillate (single cell with air on both sides has
+        //    no opposite gas, stays put), and the pool's edge
+        //    cells (gas on one side, air on the other) push
+        //    outward into the air.
         for (const sx of sides) {
-            if (canSwapInto(x + sx, y - 1, id)) {
-                swapWith(x, y, x + sx, y - 1, idx, id);
+            const oppX = x - sx;
+            if (oppX < 0 || oppX >= W) continue;
+            if (bitmap._readIdUnchecked(oppX, y) !== id) continue;
+            if (canSwapInto(x + sx, y, id)) {
+                swapWith(x, y, x + sx, y, idx, id);
                 break;
             }
         }
