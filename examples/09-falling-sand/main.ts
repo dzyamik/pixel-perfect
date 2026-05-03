@@ -449,34 +449,29 @@ class FallingSandScene extends Phaser.Scene {
                 const dx = x - cx;
                 const dy = y - cy;
                 if (dx * dx + dy * dy > r2) continue;
-                // v3.1.25: fluid brush deposits a continuous stream
-                // from the cursor down to the first non-fluid cell,
-                // every cell at saturated mass (1.0) and ALWAYS
-                // overwriting (no air-only check). The cursor-only
-                // saturated brush from v3.1.24 hid the air-at-top
-                // flicker but the falling column below the brush
-                // showed a gap pattern: source mass=1.0, target air
-                // = 0, `stableSplit(1.0) = 1.0` means full transfer,
-                // source evaporates, gap "falls" toward the surface
-                // each tick. Stream-overwrite pre-fills every cell
-                // in the column at 1.0 each tick — cell-to-cell
-                // transfers are then compression-aware (both cells
-                // at 1.0 → `stableSplit(2.0) ≈ 1.02`, tiny flow), so
-                // the column stays solid as long as the brush is
-                // held. Stops at the first non-air, non-same-fluid
-                // cell so the stream doesn't punch through stone /
-                // wood / a denser fluid pool. For non-fluid
-                // materials (sand / wood / fire) keep the air-only
-                // check so dragging the brush over a sand pile
-                // doesn't stamp duplicate sand grains.
+                // v3.1.26: fluid brush deposits ONLY at the cursor
+                // (no stream-down) at saturated mass=1.0, always
+                // overwriting (no air-only check) so cells inside
+                // the brush footprint stay saturated each tick.
+                // The v3.1.25 stream pre-filled every cell from the
+                // cursor down to the floor in a single frame, which
+                // looked like the pour "started from the ground"
+                // since the user saw water everywhere in the column
+                // at once instead of a stream emanating from the
+                // brush. Cursor-only with overwrite produces a
+                // visible falling stream emerging from the brush
+                // footprint and reaching the surface via natural
+                // per-cell mass transfer. The fall column will show
+                // the v3 gap pattern (cells alternate water / air
+                // each tick as mass transfers down) — that's an
+                // inherent property of the discrete mass-transfer
+                // sim and would require modifying `stepLiquid` to
+                // hide. For non-fluid materials (sand / wood /
+                // fire) keep the air-only check so dragging the
+                // brush over a sand pile doesn't stamp duplicate
+                // sand grains.
                 if (isFluid) {
-                    let py = y;
-                    while (py < HEIGHT) {
-                        const id = bm.getPixel(x, py);
-                        if (id !== 0 && id !== materialId) break;
-                        bm.setMass(x, py, 1.0, materialId);
-                        py += 1;
-                    }
+                    bm.setMass(x, y, 1.0, materialId);
                 } else {
                     if (bm.getPixel(x, y) !== 0) continue;
                     bm.setPixel(x, y, materialId);
