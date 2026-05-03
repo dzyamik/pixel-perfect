@@ -1878,6 +1878,51 @@ describe('CellularAutomaton.step — napalm above oil (v3.1.23)', () => {
     });
 });
 
+describe('CellularAutomaton.step — gas pool moves as a single mass (v3.1.28)', () => {
+    // v3.1.28: gas pools rise as a unit — `liftGasPool` swaps each
+    // gas cell with the cell directly above (air, fire, water, etc.,
+    // anything non-static and non-same-id), processed top-first so
+    // a contiguous pool translates without smearing. Per-cell
+    // `stepLiquid` is skipped for gas cells in pools so it can't
+    // race with the lift. The lift also keeps the just-vacated air
+    // cell tagged with the pool id, which prevents adjacent water
+    // from laterally donating into it (otherwise water spreads in,
+    // re-unifies the pool with the surrounding fluid, and
+    // `distributePoolMass` moves the gas back down to the unified
+    // pool's surface row).
+
+    it('3x3 gas blob in open air rises as a unit', () => {
+        const W = 9;
+        const H = 14;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [stone, gas],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        for (let y = 0; y < H; y++) {
+            bm.setPixel(0, y, stone.id);
+            bm.setPixel(W - 1, y, stone.id);
+        }
+        for (let y = 7; y <= 9; y++) {
+            for (let x = 3; x <= 5; x++) bm.setPixel(x, y, gas.id);
+        }
+        // After 4 ticks, the 3x3 blob should be at rows 3-5
+        // (rose by 4 from rows 7-9). Same shape preserved.
+        for (let t = 0; t < 4; t++) CellularAutomaton.step(bm, t);
+        for (let y = 3; y <= 5; y++) {
+            for (let x = 3; x <= 5; x++) {
+                expect(bm.getPixel(x, y)).toBe(gas.id);
+            }
+        }
+        // Cells that the blob vacated (rows 7-9) are now air.
+        for (let y = 7; y <= 9; y++) {
+            for (let x = 3; x <= 5; x++) {
+                expect(bm.getPixel(x, y)).toBe(0);
+            }
+        }
+    });
+});
+
 describe('CellularAutomaton.step — air displacement under overhang (v3.1.21)', () => {
     // v3.1.21: bubbles stuck under an overhang (cell above is NOT
     // a pool fluid) can't rise via the v3.1.19 per-tick lift —

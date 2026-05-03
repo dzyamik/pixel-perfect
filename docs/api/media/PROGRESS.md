@@ -145,6 +145,7 @@ fluid-feature passes when relevant.
 | v3.1.25 — demo 09 brush stream-overwrite (hide falling-column gap) | ⚠️ reverted in v3.1.26 | `v3.1.25` |
 | v3.1.26 — demo 09 brush cursor-only with overwrite | ⚠️ reverted in v3.1.27 | `v3.1.26` |
 | v3.1.27 — demo 09 brush cursor-only with air-only check | ✅ done | `v3.1.27` |
+| v3.1.28 — gas pools move as a single united mass (lift) | ✅ done | `v3.1.28` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 | v3.2.x — air handling (remaining backlog items) | ⬜ backlog | — |
 

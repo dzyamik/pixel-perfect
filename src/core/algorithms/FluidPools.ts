@@ -764,3 +764,108 @@ export function liftAirBubblesAll(
         liftAirBubbles(bitmap, pool, poolIds, materials);
     }
 }
+
+/**
+ * Lifts each gas cell in `pool` one row by swapping with the air
+ * cell directly above (v3.1.28). Mirror of `liftAirBubbles`: where
+ * an enclosed air bubble inside water rises one row per tick by
+ * swapping with the heavier fluid above, a gas cell at the
+ * boundary of its pool rises by swapping with the lighter (air)
+ * neighbor above. Together with the unified-pool sort that places
+ * gas at the top of any mixed pool, this makes a gas blob
+ * translate as a single unit through open air rather than smearing
+ * upward via per-cell `stepLiquid` (which processes cells y-desc
+ * and would distort the pool's shape).
+ *
+ * Cells are sorted by index ascending (= y first, x within row),
+ * so a contiguous gas pool rises as a unit: the topmost gas cells
+ * swap with the air above first, and the cascade fills the
+ * just-vacated cells with the gas cells from below.
+ *
+ * Stops at any non-air up-neighbor (stone lid, heavier fluid,
+ * world edge) — that column doesn't lift this tick.
+ */
+function liftGasPool(
+    bitmap: ChunkedBitmap,
+    pool: FluidPool,
+    poolIds: Uint16Array,
+    materials: MaterialRegistry,
+): void {
+    const W = bitmap.width;
+    const masses = bitmap._getMassArrayUnchecked();
+
+    // Collect gas cells in this pool in idx-ascending order so the
+    // top-of-column lifts first and the next cell down can rise
+    // into the just-vacated slot.
+    const gasCells: number[] = [];
+    for (const idx of pool.cells) {
+        const cy = (idx / W) | 0;
+        const cx = idx - cy * W;
+        const id = bitmap._readIdUnchecked(cx, cy);
+        if (id === 0) continue;
+        const mat = materials.get(id);
+        if (mat?.simulation !== 'gas') continue;
+        gasCells.push(idx);
+    }
+    if (gasCells.length === 0) return;
+    gasCells.sort((a, b) => a - b);
+
+    for (const idx of gasCells) {
+        const y = (idx / W) | 0;
+        if (y === 0) continue;
+        const x = idx - y * W;
+        // Cell may have been vacated by a previous swap in this
+        // pass (cascade chain). Skip if no longer gas.
+        const id = bitmap._readIdUnchecked(x, y);
+        if (id === 0) continue;
+        const upIdx = idx - W;
+        const upId = bitmap._readIdUnchecked(x, y - 1);
+        // Same-gas above: leave to mass-transfer / cascade. Static
+        // (stone, settled-sand, wood etc.) or unknown id: blocked.
+        if (upId === id) continue;
+        if (upId !== 0) {
+            const upMat = materials.get(upId);
+            if (upMat === undefined) continue;
+            if (upMat.simulation === undefined || upMat.simulation === 'static') continue;
+        }
+        // Swap. Up cell receives gas; this cell receives whatever
+        // was above (air, fire, oil, water — all heavier than gas).
+        const gasMass = masses[idx]!;
+        const upMass = upId === 0 ? 0 : masses[upIdx]!;
+        bitmap._writeIdUnchecked(x, y - 1, id);
+        masses[upIdx] = gasMass;
+        bitmap._markCellChanged(x, y - 1, true);
+        bitmap._writeIdUnchecked(x, y, upId);
+        masses[idx] = upMass;
+        bitmap._markCellChanged(x, y, true);
+        // Move the pool's tag with the gas: the new gas position
+        // joins the pool. KEEP the old position tagged with the
+        // pool id too — `stepLiquid`'s `isBubbleAt` check then
+        // sees the just-vacated air cell as an enclosed bubble
+        // and skips lateral / vertical donation into it. Without
+        // that, adjacent water cells laterally spread into the
+        // air cell within a tick, re-unifying the gas pool with
+        // the water pool, and `distributePoolMass` then moves
+        // gas back down to the unified pool's surface row,
+        // canceling the lift. The next tick's `detectAirBubbles`
+        // also re-tags this air cell on its own (it's enclosed
+        // by gas + water + walls), but tagging now prevents any
+        // damage during this tick's per-cell pass.
+        poolIds[upIdx] = pool.id;
+        // poolIds[idx] stays at pool.id (no clear).
+    }
+}
+
+/**
+ * Public entry point — runs `liftGasPool` for every pool.
+ */
+export function liftGasPoolsAll(
+    bitmap: ChunkedBitmap,
+    pools: Map<number, FluidPool>,
+    materials: MaterialRegistry,
+): void {
+    const poolIds = bitmap._getPoolIdsUnchecked();
+    for (const pool of pools.values()) {
+        liftGasPool(bitmap, pool, poolIds, materials);
+    }
+}

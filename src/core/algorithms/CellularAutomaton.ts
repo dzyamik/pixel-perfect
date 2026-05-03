@@ -6,6 +6,7 @@ import {
     distributePoolMass,
     isPoolInterior,
     liftAirBubblesAll,
+    liftGasPoolsAll,
     NO_POOL,
 } from './FluidPools.js';
 
@@ -179,6 +180,13 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
         // its post-distribute mass; updates poolIds in place so the
         // per-cell loop below sees a consistent sidecar.
         liftAirBubblesAll(bitmap, pools, materials);
+        // v3.1.28: gas-pool lift. Mirror of bubble lift — gas cells
+        // at the top of a pool rise into adjacent air cells one row
+        // per tick. Combined with the per-cell skip below for gas
+        // cells in pools, the gas blob translates as a single unit
+        // through open air rather than smearing upward (per-cell
+        // stepLiquid processes cells y-desc which distorts shape).
+        liftGasPoolsAll(bitmap, pools, materials);
         poolIds = bitmap._getPoolIdsUnchecked();
     }
 
@@ -198,10 +206,18 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
         // set by `distributePoolMass`; per-cell flow has nothing
         // to add (every 4-neighbor is the same material with the
         // same equilibrium mass).
+        // v3.1.28: also skip ALL gas cells that belong to a pool —
+        // `liftGasPoolsAll` translates the gas blob as a single
+        // unit one row per tick by swapping with whatever lies
+        // above (air, fire, oil, water; static and same-gas
+        // skipped). Per-cell `stepLiquid` for the same gas cells
+        // would race with the lift and laterally smear gas into
+        // adjacent air outside the pool footprint.
         if (poolIds !== null) {
             const pid = poolIds[idx]!;
-            if (pid !== NO_POOL && isPoolInterior(poolIds, x, y, W, H, pid)) {
-                continue;
+            if (pid !== NO_POOL) {
+                if (isPoolInterior(poolIds, x, y, W, H, pid)) continue;
+                if (kind === 'gas') continue;
             }
         }
 
