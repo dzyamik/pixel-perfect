@@ -186,6 +186,13 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
         // cells in pools, the gas blob translates as a single unit
         // through open air rather than smearing upward (per-cell
         // stepLiquid processes cells y-desc which distorts shape).
+        // v3.1.31: run gas-pool lift TWICE per tick. Doubles the
+        // surface-flattening rate for a wide gas pool spreading
+        // along a ceiling — the user wanted a faster fill. The
+        // two passes use opposite cascade directions (tick parity
+        // for the first call, tick + 1 for the second), so a
+        // pool's left and right edges both advance every frame
+        // instead of alternating frame-to-frame.
         liftGasPoolsAll(bitmap, pools, materials, tick);
         poolIds = bitmap._getPoolIdsUnchecked();
     }

@@ -854,6 +854,15 @@ function liftGasPool(
     // Pass 1: vertical and diagonal-up lift. Cells that don't
     // move here are stuck against a non-static ceiling/wall and
     // are candidates for lateral spread in pass 2.
+    //
+    // v3.1.31 — DOUBLE-HOP the straight-up swap. After a
+    // successful swap, immediately try another up-swap from the
+    // new position. This doubles the rise rate per tick (2 rows
+    // instead of 1) without breaking the cascade — each cell
+    // still rises into the air the cell above just vacated, and
+    // the second hop fills in cleanly above. Diagonal swaps
+    // intentionally stay single-hop (a diagonal+diagonal pair
+    // would shear the pool shape).
     const stuckCells: number[] = [];
     for (const idx of gasCells) {
         const y = (idx / W) | 0;
@@ -863,6 +872,10 @@ function liftGasPool(
         // 1. Try straight up.
         if (y > 0 && canSwapInto(x, y - 1, id)) {
             swapWith(x, y, x, y - 1, idx, id);
+            // 2x rate: try another up-swap from the new position.
+            if (y > 1 && canSwapInto(x, y - 2, id)) {
+                swapWith(x, y - 1, x, y - 2, idx - W, id);
+            }
             continue;
         }
         // 2. v3.1.29 — diagonal up. Lets gas slide around an
@@ -910,6 +923,11 @@ function liftGasPool(
             if (bitmap._readIdUnchecked(oppX, y) !== id) continue;
             if (canSwapInto(x + sx, y, id)) {
                 swapWith(x, y, x + sx, y, idx, id);
+                // v3.1.31: 2x flatten rate. After the lateral
+                // swap, try another step in the same direction.
+                if (canSwapInto(x + 2 * sx, y, id)) {
+                    swapWith(x + sx, y, x + 2 * sx, y, idx + sx, id);
+                }
                 break;
             }
         }

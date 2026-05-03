@@ -148,6 +148,7 @@ fluid-feature passes when relevant.
 | v3.1.28 — gas pools move as a single united mass (lift) | ✅ done | `v3.1.28` |
 | v3.1.29 — diagonal gas lift (slide around walls) | ✅ done | `v3.1.29` |
 | v3.1.30 — gas escapes world edge under pressure (no piling) | ✅ done | `v3.1.30` |
+| v3.1.31 — 2x gas flatten rate (double-hop lift) | ✅ done | `v3.1.31` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 | v3.2.x — air handling (remaining backlog items) | ⬜ backlog | — |
 

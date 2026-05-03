@@ -1929,9 +1929,11 @@ describe('CellularAutomaton.step — gas pool moves as a single mass (v3.1.28)',
         for (let y = 7; y <= 9; y++) {
             for (let x = 3; x <= 5; x++) bm.setPixel(x, y, gas.id);
         }
-        // After 4 ticks, the 3x3 blob should be at rows 3-5
-        // (rose by 4 from rows 7-9). Same shape preserved.
-        for (let t = 0; t < 4; t++) CellularAutomaton.step(bm, t);
+        // v3.1.31 runs the gas lift twice per tick (2x flatten
+        // rate the user requested), so the blob rises 2 rows per
+        // tick. After 2 ticks it's risen by 4 rows: from rows
+        // 7-9 to rows 3-5. Same shape preserved.
+        for (let t = 0; t < 2; t++) CellularAutomaton.step(bm, t);
         for (let y = 3; y <= 5; y++) {
             for (let x = 3; x <= 5; x++) {
                 expect(bm.getPixel(x, y)).toBe(gas.id);
