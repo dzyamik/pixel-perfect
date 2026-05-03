@@ -143,7 +143,8 @@ fluid-feature passes when relevant.
 | v3.1.23 — napalm distinct rank (sorts above oil) | ✅ done | `v3.1.23` |
 | v3.1.24 — demo 09 brush deposits at saturated mass (fix flicker) | ✅ done | `v3.1.24` |
 | v3.1.25 — demo 09 brush stream-overwrite (hide falling-column gap) | ⚠️ reverted in v3.1.26 | `v3.1.25` |
-| v3.1.26 — demo 09 brush cursor-only with overwrite | ✅ done | `v3.1.26` |
+| v3.1.26 — demo 09 brush cursor-only with overwrite | ⚠️ reverted in v3.1.27 | `v3.1.26` |
+| v3.1.27 — demo 09 brush cursor-only with air-only check | ✅ done | `v3.1.27` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 | v3.2.x — air handling (remaining backlog items) | ⬜ backlog | — |
 

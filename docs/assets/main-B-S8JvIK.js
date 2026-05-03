@@ -449,31 +449,29 @@ class FallingSandScene extends Phaser.Scene {
                 const dx = x - cx;
                 const dy = y - cy;
                 if (dx * dx + dy * dy > r2) continue;
-                // v3.1.26: fluid brush deposits ONLY at the cursor
-                // (no stream-down) at saturated mass=1.0, always
-                // overwriting (no air-only check) so cells inside
-                // the brush footprint stay saturated each tick.
-                // The v3.1.25 stream pre-filled every cell from the
-                // cursor down to the floor in a single frame, which
-                // looked like the pour "started from the ground"
-                // since the user saw water everywhere in the column
-                // at once instead of a stream emanating from the
-                // brush. Cursor-only with overwrite produces a
-                // visible falling stream emerging from the brush
-                // footprint and reaching the surface via natural
-                // per-cell mass transfer. The fall column will show
-                // the v3 gap pattern (cells alternate water / air
-                // each tick as mass transfers down) — that's an
-                // inherent property of the discrete mass-transfer
-                // sim and would require modifying \`stepLiquid\` to
-                // hide. For non-fluid materials (sand / wood /
-                // fire) keep the air-only check so dragging the
-                // brush over a sand pile doesn't stamp duplicate
-                // sand grains.
+                // v3.1.27: fluid brush deposits ONLY at the cursor
+                // at saturated mass=1.0, with air-only check so
+                // brush-radius cells empty after the water cascades
+                // down. The v3.1.26 always-overwrite kept refilling
+                // brush-radius cells every tick — looked like water
+                // "piles at the top of the screen" because the
+                // brush footprint was visible as a constant pile of
+                // water as long as the user dragged the mouse. With
+                // air-only, the brush deposits once per cell; once
+                // those cells are water they're skipped, the per-
+                // cell stepLiquid moves them downward, and the
+                // brush-radius region empties as cells cascade.
+                // For sustained painting the user drags the mouse;
+                // each pointermove deposits in any newly-entered
+                // air cell. The fall column still shows the v3 gap
+                // pattern (cells alternate water/air each tick as
+                // mass transfers down) — fundamental to the mass-
+                // based sim, would require modifying \`stepLiquid\`
+                // to leave residual mass.
+                if (bm.getPixel(x, y) !== 0) continue;
                 if (isFluid) {
                     bm.setMass(x, y, 1.0, materialId);
                 } else {
-                    if (bm.getPixel(x, y) !== 0) continue;
                     bm.setPixel(x, y, materialId);
                 }
             }
