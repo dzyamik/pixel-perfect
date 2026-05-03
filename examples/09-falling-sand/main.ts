@@ -448,24 +448,25 @@ class FallingSandScene extends Phaser.Scene {
                 const dy = y - cy;
                 if (dx * dx + dy * dy > r2) continue;
                 if (bm.getPixel(x, y) !== 0) continue;
-                // For fluid brushes, walk the brush cell downward
-                // through the air column to the first supported cell
-                // (water or static directly below) and drop most of
-                // the mass there. ALSO leave a small visual mass at
-                // the brush position so the user can see the pour
-                // in flight. The visual cell cascades downward
-                // through subsequent ticks via the normal vertical
-                // step; with v3.1.12's anchor check it doesn't leak
-                // laterally.
+                // v3.1.22: deposit fluid as a continuous stream from
+                // the cursor down to the first supported cell. Every
+                // air cell in the column gets `mass = 0.5` so the
+                // user sees a solid pour visual rather than the
+                // pre-v3.1.22 walk-down behavior (which dropped most
+                // of the mass at the first supported cell — "the
+                // ground" — and left only a thin trail at the
+                // cursor). The stream re-fills the column every
+                // frame, hiding the falling-column gap pattern that
+                // mass transfer produces between full and empty
+                // cells. With v3.1.17's unified-pool distribute,
+                // any mass landing on an existing pool is absorbed
+                // flat (no compression spike), so the brush
+                // depositing through the air column is safe.
                 if (isFluid) {
                     let py = y;
-                    while (py + 1 < HEIGHT && bm.getPixel(x, py + 1) === 0) {
+                    while (py < HEIGHT && bm.getPixel(x, py) === 0) {
+                        bm.setMass(x, py, 0.5, materialId);
                         py += 1;
-                    }
-                    if (bm.getPixel(x, py) !== 0) continue;
-                    bm.setMass(x, py, 0.5, materialId);
-                    if (py !== y) {
-                        bm.setMass(x, y, 0.1, materialId);
                     }
                 } else {
                     bm.setPixel(x, y, materialId);

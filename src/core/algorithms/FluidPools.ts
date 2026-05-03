@@ -222,6 +222,14 @@ export function distributePoolMass(
         hasAirBubbles = true;
     }
     const ys = [...cellsByY.keys()].sort((a, b) => b - a);
+    // v3.1.22: sort cells within each row by index (= x ascending,
+    // since y is fixed within a row) so the transition-row cells
+    // and the leftover air cells end up at the same x positions
+    // every tick. Without this sort, flood-fill insertion order
+    // bleeds into distribute's output: a transition cell or stray
+    // air cell would jitter between x positions across ticks as
+    // the flood-fill stack happened to reach different cells first.
+    for (const row of cellsByY.values()) row.sort((a, b) => a - b);
 
     // Materials in this pool, sorted heaviest-first (water > oil > gas).
     const idsByRank = [...pool.materialMass.keys()].sort((a, b) => {

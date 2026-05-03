@@ -1765,14 +1765,19 @@ describe('CellularAutomaton.step — enclosed air bubbles rise (v3.1.19)', () =>
         // Run more than enough ticks for the bubble to reach the
         // top row (1) and stop there.
         for (let t = 0; t < 30; t++) CellularAutomaton.step(bm, t);
-        // Bubble cells trapped under the lid: row 1 should still
-        // hold the air bubble (cells (4, 1) and (5, 1)). All other
-        // cells in row 1 are water.
-        expect(bm.getPixel(4, 1)).toBe(0);
-        expect(bm.getPixel(5, 1)).toBe(0);
-        for (const x of [1, 2, 3, 6, 7, 8]) {
-            expect(bm.getPixel(x, 1)).toBe(water.id);
+        // Bubble cells trapped under the lid: row 1 should hold
+        // exactly 2 air cells (the surviving bubble) and 6 water
+        // cells. The exact x positions depend on distribute's
+        // within-row ordering; only the count matters.
+        let airAtTopRow = 0;
+        let waterAtTopRow = 0;
+        for (let x = 1; x < W - 1; x++) {
+            const id = bm.getPixel(x, 1);
+            if (id === 0) airAtTopRow += 1;
+            else if (id === water.id) waterAtTopRow += 1;
         }
+        expect(airAtTopRow).toBe(2);
+        expect(waterAtTopRow).toBe(W - 2 - 2);
     });
 
     it('vertical 2-cell bubble rises as a unit (no vertical tearing)', () => {

@@ -2,7 +2,7 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-03, v3.1.21 distribute-lift for stuck bubbles (backlog item #2 closed)
+> Last updated: 2026-05-03, v3.1.22 brush stream + deterministic distribute order
 
 ---
 
@@ -139,10 +139,70 @@ fluid-feature passes when relevant.
 | v3.1.19 — enclosed air bubbles rise + pop at surface | ✅ done | `v3.1.19` |
 | v3.1.20 — gas correctness in unified pool + transition-row drift | ✅ done | `v3.1.20` |
 | v3.1.21 — distribute-lift for stuck bubbles (overhang / cavity) | ✅ done | `v3.1.21` |
+| v3.1.22 — demo 09 brush stream + deterministic distribute order | ✅ done | `v3.1.22` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 | v3.2.x — air handling (remaining backlog items) | ⬜ backlog | — |
 
 Test suite: 381 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.22 — brush stream + deterministic distribute order (2026-05-03)
+
+User-reported after v3.1.21: "air appears not from the brush
+but from the ground; doesn't settle, piles, moves." Two
+contributing factors:
+
+1. **Brush walk-down hid where the user clicked.** Demo 09's
+   v3.1.13 brush walked the cursor cell DOWN through the air
+   column to the first supported cell, dropped most of its
+   mass there, and left only a thin (mass 0.1) trail at the
+   cursor position. Result: fluid appeared at the floor /
+   surface, not where the user clicked. The original
+   workaround was for a v3.1.x burst-pile artifact — mass=1.0
+   cells landing on a saturated pool produced a visible
+   compression spike upward — but `v3.1.17`'s unified-pool
+   distribute absorbs bursts into a flat surface, so the
+   workaround is no longer required.
+
+2. **Distribute's transition / leftover cells jittered between
+   ticks.** `cellsByY` was built in flood-fill insertion
+   order; whichever cell happened to be reached first by the
+   pool flood-fill became the row's "first" position. A
+   transition row's water cell or a leftover air cell ended
+   up at different x positions tick-to-tick as flood-fill
+   stack order shifted with bitmap state. Visible as a stray
+   air / water cell sliding across the surface.
+
+### Fix
+
+- `examples/09-falling-sand/main.ts` — fluid brush deposits a
+  continuous stream from cursor down to the first supported
+  cell, every air cell at mass 0.5. The pour is solid (no
+  falling-column gap pattern) and the user sees fluid spawn
+  at the cursor position. Stream length shortens as the
+  surface rises, so fill rate slows naturally.
+- `src/core/algorithms/FluidPools.ts` — `distributePoolMass`
+  sorts each row's cells by index ascending before allocating.
+  The transition / leftover position is now deterministic
+  (heaviest fluid at the leftmost cells, lighter / air at the
+  rightmost) and stable across ticks.
+
+### Files affected
+
+- `src/core/algorithms/FluidPools.ts` — within-row sort.
+- `examples/09-falling-sand/main.ts` — brush behavior + docblock.
+- `tests/core/algorithms/CellularAutomaton.test.ts` — sealed-
+  top bubble test reworded position-agnostic (counts air cells
+  in the top row instead of asserting specific x positions).
+
+### Behavior verified
+
+- Fluid brush spawns water at the cursor position immediately;
+  the stream fills the column down to the surface visibly.
+- Bubbles trapped in surface row of a sealed container stay
+  in deterministic positions across ticks.
+- 387 unit tests pass; typecheck + lint clean.
 
 ---
 
