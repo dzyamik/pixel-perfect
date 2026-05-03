@@ -450,26 +450,26 @@ class FallingSandScene extends Phaser.Scene {
                 const dy = y - cy;
                 if (dx * dx + dy * dy > r2) continue;
                 if (bm.getPixel(x, y) !== 0) continue;
-                // v3.1.22: deposit fluid as a continuous stream from
-                // the cursor down to the first supported cell. Every
-                // air cell in the column gets \`mass = 0.5\` so the
-                // user sees a solid pour visual rather than the
-                // pre-v3.1.22 walk-down behavior (which dropped most
-                // of the mass at the first supported cell — "the
-                // ground" — and left only a thin trail at the
-                // cursor). The stream re-fills the column every
-                // frame, hiding the falling-column gap pattern that
-                // mass transfer produces between full and empty
-                // cells. With v3.1.17's unified-pool distribute,
-                // any mass landing on an existing pool is absorbed
-                // flat (no compression spike), so the brush
-                // depositing through the air column is safe.
+                // v3.1.24: deposit fluid AT the cursor at saturated
+                // mass (1.0 — \`setPixel\` default). Earlier attempts
+                // tried \`setMass(0.5)\` plus a walk-down or whole-
+                // column stream; both interacted badly with the
+                // unified-pool \`distributePoolMass\`. Pool mass below
+                // pool capacity makes distribute saturate the
+                // bottom rows and demote the top rows to air —
+                // "air appears not from the brush but from the
+                // ground" (the painted column flickers air/water
+                // each tick as the brush refills cells distribute
+                // just relocated). Saturated cells (mass 1.0)
+                // can't be compressed further, so distribute
+                // leaves them in place. Per-cell \`stepLiquid\`
+                // handles the natural fall via compression-aware
+                // \`stableSplit\`: the topmost falling cell stays
+                // ~0.98 mass each tick (small flow into the cell
+                // below) so the user sees a continuous column
+                // from the cursor down rather than a gap pattern.
                 if (isFluid) {
-                    let py = y;
-                    while (py < HEIGHT && bm.getPixel(x, py) === 0) {
-                        bm.setMass(x, py, 0.5, materialId);
-                        py += 1;
-                    }
+                    bm.setPixel(x, y, materialId);
                 } else {
                     bm.setPixel(x, y, materialId);
                 }
