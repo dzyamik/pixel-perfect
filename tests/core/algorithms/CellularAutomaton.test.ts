@@ -1512,6 +1512,192 @@ describe('CellularAutomaton.step — mixed-rank stack equilibrium', () => {
     });
 });
 
+describe('CellularAutomaton.step — oil surfaces and flattens on water (v3.1.17)', () => {
+    // User-reported (2026-05-03): oil placed inside / under a
+    // body of water should rise to the top and form a flat
+    // layer covering the water. The 1D 5-fluid stack test above
+    // confirms density swap works one row per tick. These tests
+    // cover the 2D scenario where pool fast-path interacts with
+    // cross-density swaps.
+
+    it('oil sandbox in water rises to surface within ~depth ticks', () => {
+        // 5-wide pool, 6 tall. Oil cell injected at the bottom
+        // center should reach the surface row in <= 6 ticks.
+        const W = 5;
+        const H = 8;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [water, oil, stone],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        for (let y = 1; y < H - 1; y++) {
+            for (let x = 0; x < W; x++) bm.setPixel(x, y, water.id);
+        }
+        bm.setPixel(2, H - 2, oil.id); // oil at bottom center
+        for (let t = 0; t < 12; t++) CellularAutomaton.step(bm, t);
+        // Oil should now be at row 1 (the topmost water row).
+        const topRow = 1;
+        let oilFound = false;
+        for (let x = 0; x < W; x++) {
+            if (bm.getPixel(x, topRow) === oil.id) {
+                oilFound = true;
+                break;
+            }
+        }
+        expect(oilFound).toBe(true);
+    });
+
+    it('oil dropped onto water spreads to cover the full surface', () => {
+        // Oil placed at one column of the surface should spread
+        // laterally to cover the full water surface within
+        // ~width ticks.
+        const W = 9;
+        const H = 8;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [water, oil, stone],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        for (let y = 3; y < H - 1; y++) {
+            for (let x = 0; x < W; x++) bm.setPixel(x, y, water.id);
+        }
+        // Drop oil at top of surface row column 4 (center). The
+        // brush walks down through air to py=2 (just above water
+        // surface at y=3). Mass 0.5 per the demo.
+        bm.setMass(4, 2, 0.5, oil.id);
+        for (let t = 0; t < 30; t++) CellularAutomaton.step(bm, t);
+        // After settling, every column should have oil somewhere
+        // above its water column (oil floats on water, covers
+        // surface).
+        const oilColumns: number[] = [];
+        for (let x = 0; x < W; x++) {
+            for (let y = 0; y < H; y++) {
+                if (bm.getPixel(x, y) === oil.id) {
+                    oilColumns.push(x);
+                    break;
+                }
+            }
+        }
+        expect(oilColumns).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+    });
+
+    it('oil layer at bottom of wide water pool — full column rise', () => {
+        // 12-wide, 10 deep. Full bottom row of oil, water above.
+        // Stress-test pool fast-path interaction with cross-rank
+        // boundary swaps.
+        const W = 12;
+        const H = 10;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [water, oil, stone],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        // 2 rows of oil at bottom, 6 rows of water above.
+        for (let x = 0; x < W; x++) {
+            bm.setPixel(x, H - 2, oil.id);
+            bm.setPixel(x, H - 3, oil.id);
+        }
+        for (let y = 1; y < H - 3; y++) {
+            for (let x = 0; x < W; x++) bm.setPixel(x, y, water.id);
+        }
+        // After enough ticks, oil should be at the TOP, water below.
+        for (let t = 0; t < 50; t++) CellularAutomaton.step(bm, t);
+        // Top 2 rows of fluid: should be oil. Bottom 6 rows: water.
+        for (let x = 0; x < W; x++) {
+            expect(bm.getPixel(x, 1)).toBe(oil.id);
+            expect(bm.getPixel(x, 2)).toBe(oil.id);
+            for (let y = 3; y < H - 1; y++) {
+                expect(bm.getPixel(x, y)).toBe(water.id);
+            }
+        }
+    });
+
+    it('water chimney through oil heals — water sinks, oil reforms on top', () => {
+        // The motivating v3.1.17 scenario. Water is denser and
+        // CAN sink through oil, so a sustained water pour onto an
+        // oil pool drills a vertical "chimney" of water through
+        // the oil. Pre-v3.1.17 the chimney was stable (no lateral
+        // cross-density swap rule), and oil never reformed on top.
+        // v3.1.17 unifies fluid pools by 4-connectivity; the
+        // hydrostatic distribution then heals the chimney within
+        // one tick.
+        const W = 12;
+        const H = 12;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [water, oil, stone],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        for (let y = 0; y < H; y++) {
+            bm.setPixel(0, y, stone.id);
+            bm.setPixel(W - 1, y, stone.id);
+        }
+        // 4 rows of oil at the bottom of the basin.
+        for (let y = H - 5; y < H - 1; y++) {
+            for (let x = 1; x < W - 1; x++) bm.setPixel(x, y, oil.id);
+        }
+        // Carve a "chimney" of water down the middle (replace 3
+        // oil cells in column 5 with water). Hand-crafts the bug
+        // state without needing the fall mechanics.
+        bm.setPixel(5, H - 4, water.id);
+        bm.setPixel(5, H - 3, water.id);
+        bm.setPixel(5, H - 2, water.id);
+        for (let t = 0; t < 5; t++) CellularAutomaton.step(bm, t);
+        // After a few ticks: water should sink to the bottom row,
+        // oil should fill the upper rows.
+        // Bottom row should be entirely water (or at least mostly).
+        let waterAtBottom = 0;
+        for (let x = 1; x < W - 1; x++) {
+            if (bm.getPixel(x, H - 2) === water.id) waterAtBottom += 1;
+        }
+        // Top row of fluid should be entirely oil.
+        let oilAtTop = 0;
+        for (let x = 1; x < W - 1; x++) {
+            if (bm.getPixel(x, H - 5) === oil.id) oilAtTop += 1;
+        }
+        expect(waterAtBottom).toBeGreaterThanOrEqual(1);
+        expect(oilAtTop).toBe(W - 2);
+    });
+
+    it('mixed oil + water column resolves to oil-on-top', () => {
+        // 3-wide column, 5 deep. Top-half oil, bottom-half water.
+        // Wrong order — should flip so oil is on top.
+        const W = 3;
+        const H = 9;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [water, oil, stone],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        for (let x = 0; x < W; x++) {
+            // bottom 4: oil; top 4: water — wrong configuration.
+            bm.setPixel(x, H - 2, oil.id);
+            bm.setPixel(x, H - 3, oil.id);
+            bm.setPixel(x, H - 4, oil.id);
+            bm.setPixel(x, H - 5, oil.id);
+            bm.setPixel(x, H - 6, water.id);
+            bm.setPixel(x, H - 7, water.id);
+            bm.setPixel(x, H - 8, water.id);
+            bm.setPixel(x, H - 9, water.id);
+        }
+        for (let t = 0; t < 30; t++) CellularAutomaton.step(bm, t);
+        // After 30 ticks: oil should be on TOP, water on BOTTOM.
+        for (let x = 0; x < W; x++) {
+            // Top 4 rows: oil
+            expect(bm.getPixel(x, 0)).toBe(oil.id);
+            expect(bm.getPixel(x, 1)).toBe(oil.id);
+            expect(bm.getPixel(x, 2)).toBe(oil.id);
+            expect(bm.getPixel(x, 3)).toBe(oil.id);
+            // Bottom 4 rows: water
+            expect(bm.getPixel(x, 4)).toBe(water.id);
+            expect(bm.getPixel(x, 5)).toBe(water.id);
+            expect(bm.getPixel(x, 6)).toBe(water.id);
+            expect(bm.getPixel(x, 7)).toBe(water.id);
+            expect(bm.getPixel(x, 8)).toBe(stone.id);
+        }
+    });
+});
+
 describe('CellularAutomaton.step — fluid past fall column (v3.1.2)', () => {
     // v3.1.2: a vertical fall column (water pouring off a cliff
     // edge) used to act as a "wall" for water flowing past at the

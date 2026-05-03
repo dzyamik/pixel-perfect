@@ -473,12 +473,15 @@ Shipped in `v2.0.0` (sand), `v2.1.0` (water + density swap),
 `v2.2.0` (sand-pile settling), `v2.3.0` (oil / gas / fire +
 multi-cell flow), `v2.4.0` (sparse active-cell tracking),
 `v3.0.0` (mass-based liquids), `v3.1.0` (pool-aware fast path),
-and the `v3.1.x` patch chain ending at `v3.1.16` (cliff drainage
+and the `v3.1.x` patch chain through `v3.1.16` (cliff drainage
 hydrostatics: pool flood-fill every tick, bottom-up hydrostatic
 distribution, narrow-stream-from-anchored-edge rule, width-from-
 depth Bernoulli discretization, and L/R scan-order ping-pong for
-symmetric drainage). v3 details in
-`docs-dev/06-v3-mass-based-fluid.md`,
+symmetric drainage) and `v3.1.17` (unified multi-fluid pools:
+4-connected fluid cells of any id share one pool, distribute
+sorts cells by density rank so oil rises through water and a
+water chimney through oil heals within a tick of pool detection).
+v3 details in `docs-dev/06-v3-mass-based-fluid.md`,
 `docs-dev/07-v3.1-pool-based-fluid.md`, and the running ledger in
 `docs-dev/PROGRESS.md`.
 
@@ -500,15 +503,31 @@ different materials swap places.
 
 **Pool-aware step (v3.1)** — every tick (since v3.1.8 the
 threshold is 0), the step flood-fills connected components of
-same-material fluid cells and writes a hydrostatic bottom-up
-mass distribution to each (rows saturated at `MAX_MASS` from
-the bottom up; topmost row carries the remainder). Pool cells
-deep inside a component (every 4-neighbor in the same pool)
+fluid cells and writes a density-stratified bottom-up mass
+distribution to each. As of `v3.1.17` the flood fill is
+**multi-material**: any 4-connected fluid cells of any id
+(water / oil / gas) join the same pool; the pool tracks per-id
+mass in `materialMass: Map<number, number>`. `distributePoolMass`
+walks rows bottom-up, allocating each row to the heaviest fluid
+that still has remaining mass — pure rows are uniformly filled
+(smooth surface), the single transition row at a fluid-to-fluid
+boundary uses whole-cell allocation (saturated cells of the
+heavier fluid then saturated cells of the lighter, mass-conservative
+per id at the cost of a non-uniform within-row id pattern). Pool
+cells deep inside a component (every 4-neighbor in the same pool)
 skip per-cell `stepLiquid` entirely. Perimeter cells still go
 through `stepLiquid` so off-pool spreading, cliff drainage, and
-cross-material swaps work normally. The flood-fill + distribute
-is the canonical "instant pool flattening" trick from the
-W-Shadow / Noita / jgallant CA-fluid lineage.
+single-cell cross-material swaps work normally. The pool fast
+path is now responsible for cross-density LATERAL exchange
+(oil rising through water, water sinking through oil) — `stepLiquid`
+itself only does VERTICAL cross-density swaps, which the unified
+pool's hydrostatic sort supersedes for connected fluid bodies.
+A `MASS_DRIFT_EPS = 1e-5` tolerance on the "fluid exhausted"
+check absorbs float32 drift in the per-id mass totals.
+The flood-fill + distribute is the canonical "instant pool
+flattening" trick from the W-Shadow / Noita / jgallant CA-fluid
+lineage; the multi-material extension makes density stratification
+emerge from the same pass.
 
 **Cliff drainage rules (v3.1.12-v3.1.16)** — the lateral step
 in `stepLiquid` allows a source cell to donate to "unsupported

@@ -89,7 +89,8 @@ describe('FluidPools.detectPools', () => {
         const pools = detectPools(bm, bm.materials);
         expect(pools.size).toBe(1);
         const pool = [...pools.values()][0]!;
-        expect(pool.materialId).toBe(water.id);
+        expect(pool.materialMass.size).toBe(1);
+        expect(pool.materialMass.get(water.id)).toBeCloseTo(5.0);
         expect(pool.cells.size).toBe(5);
         expect(pool.totalMass).toBeCloseTo(5.0);
     });
@@ -105,16 +106,28 @@ describe('FluidPools.detectPools', () => {
         expect(sizes).toEqual([4, 4]);
     });
 
-    it('does not merge water and oil, even when adjacent', () => {
+    it('merges water and oil into one pool when adjacent (v3.1.17)', () => {
+        // v3.1.17: pools are multi-material so density stratification
+        // can heal cross-density chimneys via the fast path. Two
+        // touching fluids form ONE pool with per-id mass tracked
+        // separately.
         const bm = buildBitmap([
             'wwoo',
         ]);
         const pools = detectPools(bm, bm.materials);
+        expect(pools.size).toBe(1);
+        const pool = [...pools.values()][0]!;
+        expect(pool.cells.size).toBe(4);
+        expect(pool.materialMass.get(water.id)).toBeCloseTo(2.0);
+        expect(pool.materialMass.get(oil.id)).toBeCloseTo(2.0);
+    });
+
+    it('isolated water and oil blobs stay separate pools', () => {
+        const bm = buildBitmap([
+            'ww..oo',
+        ]);
+        const pools = detectPools(bm, bm.materials);
         expect(pools.size).toBe(2);
-        const water_pool = [...pools.values()].find((p) => p.materialId === water.id)!;
-        const oil_pool = [...pools.values()].find((p) => p.materialId === oil.id)!;
-        expect(water_pool.cells.size).toBe(2);
-        expect(oil_pool.cells.size).toBe(2);
     });
 
     it('uses 4-connectivity (diagonals do NOT join)', () => {
@@ -186,7 +199,7 @@ describe('FluidPools.detectPools', () => {
         const pools = detectPools(bm, bm.materials);
         const pool = [...pools.values()][0]!;
         const initialTotal = pool.totalMass;
-        distributePoolMass(bm, pool);
+        distributePoolMass(bm, pool, bm.materials);
         // Bottom row (y = 1) should be fully saturated at MAX_MASS;
         // top row (y = 0) carries the remainder (initialTotal - 4.0)
         // distributed uniformly.

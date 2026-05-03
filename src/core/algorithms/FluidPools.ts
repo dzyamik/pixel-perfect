@@ -28,18 +28,32 @@ import type { MaterialRegistry } from '../Materials.js';
 export const NO_POOL = 0xFFFF;
 
 /**
- * Connected component of same-material fluid cells.
+ * Connected component of fluid cells (water / oil / gas).
  *
  * Pools are owned by `ChunkedBitmap` and rebuilt (phase 1) or
  * incrementally maintained (phase 3) each tick. They expose
  * the aggregate state that the v3.1 step uses to skip per-cell
  * work in stable bodies of fluid.
+ *
+ * **v3.1.17:** pools are now MULTI-MATERIAL — flood fill 4-
+ * connects ANY fluid cell regardless of id. A cell of oil
+ * touching a cell of water joins the same pool. The pool then
+ * carries per-id mass totals and `distributePoolMass` writes a
+ * density-stratified profile (heaviest fluid at the bottom,
+ * lightest at the top). This makes oil rise to the top of water
+ * within one tick of pool detection, and self-heals chimneys
+ * that the per-cell density-swap rule alone can't unwind
+ * (lateral cross-density swaps don't exist in the per-cell path).
  */
 export interface FluidPool {
     /** Stable id (the index used in the per-cell sidecar). */
     readonly id: number;
-    /** Material id of every cell in this pool. */
-    readonly materialId: number;
+    /**
+     * Per-material total mass in this pool. Keys are material ids
+     * present in the pool; values are the summed mass of cells
+     * holding that id.
+     */
+    readonly materialMass: Map<number, number>;
     /**
      * Cell flat indices (`y * width + x`) belonging to the pool.
      * Use a Set so add / remove are O(1) for incremental
@@ -47,8 +61,9 @@ export interface FluidPool {
      */
     readonly cells: Set<number>;
     /**
-     * Sum of cell masses across the pool. Updated when cells
-     * are added / removed and during the equilibrium pass.
+     * Sum of cell masses across the pool, across all materials.
+     * Updated when cells are added / removed and during the
+     * equilibrium pass.
      */
     totalMass: number;
     /**
@@ -58,6 +73,25 @@ export interface FluidPool {
      * `detectPools` re-runs flood fill on these.
      */
     dirty: boolean;
+}
+
+/**
+ * Density rank for a fluid material (matches the CellularAutomaton
+ * rank constants). Higher = heavier. Returned by the rank function
+ * for use in hydrostatic stratification inside `distributePoolMass`.
+ *
+ * Kept private to this module to avoid a circular import
+ * (CellularAutomaton.ts imports FluidPools.ts, not the other way).
+ * The values match `RANK_GAS / RANK_OIL / RANK_WATER` in
+ * CellularAutomaton.ts; updates must stay in sync.
+ */
+function fluidRank(simulation: string): number {
+    switch (simulation) {
+        case 'gas': return 0;
+        case 'oil': return 3;
+        case 'water': return 4;
+        default: return -1;
+    }
 }
 
 /**
@@ -94,28 +128,49 @@ export function isPoolInterior(
 }
 
 /**
- * Distributes the pool's total mass across its cells in a
- * hydrostatic bottom-up fill: bottom rows are saturated to
- * `MAX_POOL_MASS_PER_CELL` first, then upward, with the topmost
- * row possibly partially filled with the remainder. Within a
+ * Distributes the pool's mass across its cells as a hydrostatic
+ * density-stratified bottom-up fill. Bottom rows hold the
+ * heaviest fluid present (saturated), then transitioning to the
+ * next-heavier as that fluid's mass budget runs out, until the
+ * top row may hold the lightest fluid at partial mass. Within a
  * row, mass is uniform.
+ *
+ * **v3.1.17 multi-material extension.** Pools may contain a mix
+ * of water / oil / gas (anywhere they are 4-connected). The
+ * fill processes fluids in rank-descending order (water first,
+ * then oil, then gas) and flips id + mass per cell. A "transition
+ * row" (where one fluid's budget ends mid-row) is filled
+ * uniformly with that fluid at partial mass; the next-lighter
+ * fluid starts at the next row up. This means the visible
+ * surface profile may include short transition layers but each
+ * row holds exactly one id.
+ *
+ * The single-fluid case collapses to the v3.1.8 behavior: bottom
+ * rows saturated, topmost row at partial mass with the remainder.
  *
  * This is the canonical "instant pool flattening" pass in CA
  * fluid sims (W-Shadow / jgallant / Noita lineage): a brush
  * burst that lands on top of a connected pool merges and the
  * pool's surface rises by `mass_added / footprint_width` —
  * matching real-water hydrostatics — within one tick instead of
- * cascading via reach-25 lateral over many ticks.
+ * cascading via reach-25 lateral over many ticks. With the
+ * multi-material extension, mixed fluids self-sort by density
+ * within a single pool-detection cycle.
  *
- * Cells in rows ABOVE the new surface (no mass left after the
+ * Cells in rows ABOVE all fluid surfaces (no mass left after the
  * fill) are demoted to air (mass = 0, id = 0) — otherwise they'd
  * sit at id = fluid with mass = 0, blocking pool re-detection
  * next tick.
  *
- * Caller is responsible for `pool.totalMass` being current
- * (i.e. having just rebuilt the pool via `detectPools`).
+ * Caller is responsible for `pool.totalMass` and
+ * `pool.materialMass` being current (i.e. having just rebuilt the
+ * pool via `detectPools`).
  */
-export function distributePoolMass(bitmap: ChunkedBitmap, pool: FluidPool): void {
+export function distributePoolMass(
+    bitmap: ChunkedBitmap,
+    pool: FluidPool,
+    materials: MaterialRegistry,
+): void {
     if (pool.cells.size === 0) return;
     const W = bitmap.width;
 
@@ -132,47 +187,149 @@ export function distributePoolMass(bitmap: ChunkedBitmap, pool: FluidPool): void
     }
     const ys = [...cellsByY.keys()].sort((a, b) => b - a);
 
-    let remainingMass = pool.totalMass;
+    // Materials in this pool, sorted heaviest-first (water > oil > gas).
+    const idsByRank = [...pool.materialMass.keys()].sort((a, b) => {
+        const ra = fluidRank(materials.get(a)!.simulation!);
+        const rb = fluidRank(materials.get(b)!.simulation!);
+        return rb - ra;
+    });
+
+    // Per-id remaining mass to place. Mutated as we fill rows.
+    const remaining = new Map<number, number>();
+    for (const [id, m] of pool.materialMass) remaining.set(id, m);
+
     const masses = bitmap._getMassArrayUnchecked();
+
+    // Helper to write an id+mass to a cell, dirtying it if the id
+    // changed. Skips redundant writes for perf.
+    const assignCell = (idx: number, newId: number, newMass: number): void => {
+        const cy = (idx / W) | 0;
+        const cx = idx - cy * W;
+        const oldId = bitmap._readIdUnchecked(cx, cy);
+        if (oldId !== newId) {
+            bitmap._writeIdUnchecked(cx, cy, newId);
+            bitmap._markCellChanged(cx, cy, true);
+        }
+        masses[idx] = newMass;
+    };
+
+    // Helper: does any fluid AFTER `activeIdx` still have mass?
+    const hasMoreFluidAfter = (activeIdx: number): boolean => {
+        for (let i = activeIdx + 1; i < idsByRank.length; i++) {
+            const id = idsByRank[i]!;
+            if ((remaining.get(id) ?? 0) > 0) return true;
+        }
+        return false;
+    };
+
+    // Walk fluids in rank order: bottom rows saturate with the
+    // heaviest, then transition to the next-heavier as that fluid
+    // runs out. Within a single fluid, partial-fill rows use uniform
+    // mass (smooth surface). At a fluid-to-fluid transition where
+    // one row would otherwise mix two fluids, allocate WHOLE cells
+    // (saturated) to each fluid in turn — the row's id is non-
+    // uniform but mass is conserved per id.
+    //
+    // Floating-point note: water mass accumulated through many
+    // mass-transfer ticks drifts off integer multiples of `MAX_MASS`
+    // by ~`Number.EPSILON × N`. We use `MASS_DRIFT_EPS` instead of
+    // 0 for the "fluid exhausted" check so a row that would
+    // otherwise be allocated to the lighter fluid isn't stolen by
+    // a microscopic remainder of the heavier fluid (would silently
+    // overwrite oil with water at mass ~1e-7, leaking the lighter
+    // fluid's mass into the leftover branch).
+    let fluidIdx = 0;
+    let activeId = idsByRank[fluidIdx];
+    while (activeId !== undefined && (remaining.get(activeId) ?? 0) <= MASS_DRIFT_EPS) {
+        fluidIdx += 1;
+        activeId = idsByRank[fluidIdx];
+    }
 
     for (const y of ys) {
         const rowCells = cellsByY.get(y)!;
         const rowCellCount = rowCells.length;
-        const rowCapacity = rowCellCount * MAX_POOL_MASS_PER_CELL;
+        let cellsAssigned = 0;
 
-        if (remainingMass >= rowCapacity) {
-            // Row fully saturated.
-            for (const idx of rowCells) masses[idx] = MAX_POOL_MASS_PER_CELL;
-            remainingMass -= rowCapacity;
-        } else if (remainingMass > 0) {
-            // Top of fill: row partially filled, uniform within row.
-            const perCell = remainingMass / rowCellCount;
-            for (const idx of rowCells) masses[idx] = perCell;
-            remainingMass = 0;
-        } else {
-            // Above the new surface — demote to air. Without this,
-            // cells would keep id = fluid with mass = 0, and next
-            // tick's `detectPools` would re-include them.
-            for (const idx of rowCells) {
-                masses[idx] = 0;
-                const cy = (idx / W) | 0;
-                const cx = idx - cy * W;
-                bitmap._writeIdUnchecked(cx, cy, 0);
-                bitmap._markCellChanged(cx, cy, true);
+        while (cellsAssigned < rowCellCount) {
+            while (activeId !== undefined && (remaining.get(activeId) ?? 0) <= MASS_DRIFT_EPS) {
+                fluidIdx += 1;
+                activeId = idsByRank[fluidIdx];
+            }
+            if (activeId === undefined) {
+                // No fluid left — demote remaining cells in this row
+                // (and all higher rows) to air.
+                for (let i = cellsAssigned; i < rowCellCount; i++) {
+                    assignCell(rowCells[i]!, 0, 0);
+                }
+                cellsAssigned = rowCellCount;
+                break;
+            }
+
+            const cellsLeft = rowCellCount - cellsAssigned;
+            const capacityLeft = cellsLeft * MAX_POOL_MASS_PER_CELL;
+            const remainingForActive = remaining.get(activeId)!;
+
+            if (remainingForActive >= capacityLeft) {
+                // Active fluid fills the rest of the row.
+                for (let i = cellsAssigned; i < rowCellCount; i++) {
+                    assignCell(rowCells[i]!, activeId, MAX_POOL_MASS_PER_CELL);
+                }
+                remaining.set(activeId, remainingForActive - capacityLeft);
+                cellsAssigned = rowCellCount;
+            } else if (!hasMoreFluidAfter(fluidIdx)) {
+                // Single-fluid surface row — distribute remaining
+                // mass uniformly (smooth visible surface). Matches
+                // pre-v3.1.17 behavior for single-fluid pools.
+                const perCell = remainingForActive / cellsLeft;
+                for (let i = cellsAssigned; i < rowCellCount; i++) {
+                    assignCell(rowCells[i]!, activeId, perCell);
+                }
+                remaining.set(activeId, 0);
+                cellsAssigned = rowCellCount;
+            } else {
+                // Multi-fluid transition row: allocate whole cells
+                // saturated for activeId, then loop continues with
+                // the next fluid for the remaining cells.
+                const fullCells = Math.floor(remainingForActive / MAX_POOL_MASS_PER_CELL);
+                const partialMass = remainingForActive - fullCells * MAX_POOL_MASS_PER_CELL;
+                for (let i = 0; i < fullCells; i++) {
+                    assignCell(rowCells[cellsAssigned + i]!, activeId, MAX_POOL_MASS_PER_CELL);
+                }
+                cellsAssigned += fullCells;
+                if (partialMass > 0 && cellsAssigned < rowCellCount) {
+                    assignCell(rowCells[cellsAssigned]!, activeId, partialMass);
+                    cellsAssigned += 1;
+                }
+                remaining.set(activeId, 0);
             }
         }
     }
 
-    // Mass conservation: if every row was saturated and there's
-    // still mass left over, distribute the excess as uniform
-    // compression on the topmost row (so the pool can hold it
-    // without losing mass). Cells render binary so the visible
-    // surface is unchanged.
-    if (remainingMass > 0 && ys.length > 0) {
+    // Mass conservation: any leftover (heavier-than-pool-capacity
+    // single fluid) compresses onto the topmost row of its id —
+    // matches the v3.1.8 single-fluid behavior. With multi-fluid
+    // pools the loop above conserves mass exactly, so leftover is
+    // only nonzero when the heaviest fluid alone exceeds pool
+    // capacity (compressed water tank).
+    let leftoverMass = 0;
+    let leftoverId = 0;
+    for (const [id, m] of remaining) {
+        if (m > 0) {
+            leftoverMass += m;
+            leftoverId = id;
+        }
+    }
+    if (leftoverMass > 0 && ys.length > 0) {
         const topY = ys[ys.length - 1]!;
         const topCells = cellsByY.get(topY)!;
-        const bonusPerCell = remainingMass / topCells.length;
-        for (const idx of topCells) masses[idx] = masses[idx]! + bonusPerCell;
+        const bonusPerCell = leftoverMass / topCells.length;
+        for (const idx of topCells) {
+            const cy = (idx / W) | 0;
+            const cx = idx - cy * W;
+            if (bitmap._readIdUnchecked(cx, cy) === leftoverId) {
+                masses[idx] = masses[idx]! + bonusPerCell;
+            }
+        }
     }
 }
 
@@ -187,6 +344,19 @@ export function distributePoolMass(bitmap: ChunkedBitmap, pool: FluidPool): void
 const MAX_POOL_MASS_PER_CELL = 1.0;
 
 /**
+ * Threshold under which a fluid's accumulated mass is treated as
+ * "exhausted" inside `distributePoolMass`. Float32 mass arrays
+ * drift by ~Number.EPSILON × cells when many ticks of
+ * `stableSplit`-driven micro-transfers run; without a tolerance,
+ * a residual ~1e-7 of the heavier fluid steals the surface row
+ * that should host the lighter fluid (e.g. water with 60.0000003
+ * mass eats the oil cell that should sit on top of it). Set just
+ * above the noise floor seen in practice; well below `MIN_MASS`
+ * so it can't mask a genuine sub-cell amount of fluid.
+ */
+const MASS_DRIFT_EPS = 1e-5;
+
+/**
  * Full rebuild of the pool registry from the current bitmap.
  * O(N) where N is the count of fluid cells.
  *
@@ -198,6 +368,13 @@ const MAX_POOL_MASS_PER_CELL = 1.0;
  * Materials are considered "fluid" for pooling iff
  * `simulation` is `'water' | 'oil' | 'gas'`. Sand and fire
  * stay per-cell.
+ *
+ * **v3.1.17:** flood fill is multi-material — any 4-connected
+ * fluid cells join the same pool regardless of id. The pool
+ * carries per-id mass totals so `distributePoolMass` can sort
+ * by density. This is what makes oil rise to the top of water
+ * (and a water "chimney" through oil heal) within a single
+ * tick of pool detection.
  *
  * Phase 1: the cellular automaton calls this every tick.
  * Phase 3 will replace with incremental maintenance keyed off
@@ -220,21 +397,32 @@ export function detectPools(
     // allocation.
     const stack: number[] = [];
 
+    // Cache "is fluid" per material id we encounter during the
+    // outer scan to avoid repeated map lookups.
+    const isFluidCache = new Map<number, boolean>();
+    const isFluid = (mid: number): boolean => {
+        const cached = isFluidCache.get(mid);
+        if (cached !== undefined) return cached;
+        const mat = materials.get(mid);
+        const sim = mat?.simulation;
+        const v = sim === 'water' || sim === 'oil' || sim === 'gas';
+        isFluidCache.set(mid, v);
+        return v;
+    };
+
     for (let y = 0; y < H; y++) {
         for (let x = 0; x < W; x++) {
             const flatIdx = y * W + x;
             if (poolIds[flatIdx] !== NO_POOL) continue;
             const id = bitmap._readIdUnchecked(x, y);
             if (id === 0) continue;
-            const mat = materials.get(id);
-            if (mat === undefined) continue;
-            const sim = mat.simulation;
-            if (sim !== 'water' && sim !== 'oil' && sim !== 'gas') continue;
+            if (!isFluid(id)) continue;
 
             // Start a new component. Flood-fill to all 4-connected
-            // same-id cells.
+            // fluid cells (any fluid id).
             const poolId = nextId++;
             const cells = new Set<number>();
+            const materialMass = new Map<number, number>();
             let totalMass = 0;
             stack.length = 0;
             stack.push(flatIdx);
@@ -242,34 +430,42 @@ export function detectPools(
             while (stack.length > 0) {
                 const fi = stack.pop()!;
                 cells.add(fi);
-                totalMass += masses[fi]!;
                 const cy = (fi / W) | 0;
                 const cx = fi - cy * W;
-                // 4-connected neighbors.
+                const cellId = bitmap._readIdUnchecked(cx, cy);
+                const cellMass = masses[fi]!;
+                totalMass += cellMass;
+                materialMass.set(cellId, (materialMass.get(cellId) ?? 0) + cellMass);
+                // 4-connected neighbors. Multi-material: any fluid
+                // joins the same pool.
                 if (cx > 0) {
                     const ni = fi - 1;
-                    if (poolIds[ni] === NO_POOL && bitmap._readIdUnchecked(cx - 1, cy) === id) {
+                    const nid = bitmap._readIdUnchecked(cx - 1, cy);
+                    if (poolIds[ni] === NO_POOL && nid !== 0 && isFluid(nid)) {
                         poolIds[ni] = poolId;
                         stack.push(ni);
                     }
                 }
                 if (cx + 1 < W) {
                     const ni = fi + 1;
-                    if (poolIds[ni] === NO_POOL && bitmap._readIdUnchecked(cx + 1, cy) === id) {
+                    const nid = bitmap._readIdUnchecked(cx + 1, cy);
+                    if (poolIds[ni] === NO_POOL && nid !== 0 && isFluid(nid)) {
                         poolIds[ni] = poolId;
                         stack.push(ni);
                     }
                 }
                 if (cy > 0) {
                     const ni = fi - W;
-                    if (poolIds[ni] === NO_POOL && bitmap._readIdUnchecked(cx, cy - 1) === id) {
+                    const nid = bitmap._readIdUnchecked(cx, cy - 1);
+                    if (poolIds[ni] === NO_POOL && nid !== 0 && isFluid(nid)) {
                         poolIds[ni] = poolId;
                         stack.push(ni);
                     }
                 }
                 if (cy + 1 < H) {
                     const ni = fi + W;
-                    if (poolIds[ni] === NO_POOL && bitmap._readIdUnchecked(cx, cy + 1) === id) {
+                    const nid = bitmap._readIdUnchecked(cx, cy + 1);
+                    if (poolIds[ni] === NO_POOL && nid !== 0 && isFluid(nid)) {
                         poolIds[ni] = poolId;
                         stack.push(ni);
                     }
@@ -277,7 +473,7 @@ export function detectPools(
             }
             out.set(poolId, {
                 id: poolId,
-                materialId: id,
+                materialMass,
                 cells,
                 totalMass,
                 dirty: false,

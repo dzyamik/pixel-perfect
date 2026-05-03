@@ -2,7 +2,7 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-02, v3.1.16 within-row x-order ping-pong (left-cliff symmetry)
+> Last updated: 2026-05-03, v3.1.17 unified multi-fluid pools (oil rises through water)
 
 ---
 
@@ -64,9 +64,80 @@ Running ledger of what's done, what's in flight, and what's broken. Read alongsi
 | v3.1.14 — d=1 off-cliff donation + brush visual trail | ✅ done | `v3.1.14` |
 | v3.1.15 — width-from-depth + scan-direction ping-pong + POOL_MIN_SIZE=2 | ✅ done | `v3.1.15` |
 | v3.1.16 — within-row x-order ping-pong | ✅ done | `v3.1.16` |
+| v3.1.17 — unified multi-fluid pools + hydrostatic density sort | ✅ done | `v3.1.17` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 
-Test suite: 373 tests across 22 files. typecheck and lint clean.
+Test suite: 381 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.17 — unified multi-fluid pools + hydrostatic density sort (2026-05-03)
+
+User-reported after v3.1.16: pouring water onto an existing oil
+pool drilled a vertical "chimney" of water through the oil pool
+and the chimney was stable — oil never rose to displace it. Same
+class of bug applied to oil islands inside a water body (oil never
+surfaced). The user's expectation: oil should always end up on
+top of water in a connected fluid body.
+
+### Mechanism
+
+Before v3.1.17, `detectPools` flood-filled per-id, so water and
+oil formed SEPARATE pools even when 4-connected. Each pool's
+fast-path (`distributePoolMass`) kept its own mass internally
+consistent but never re-sorted across density boundaries. The
+per-cell `stepLiquid` rule for cross-density swaps is VERTICAL
+ONLY (`canVerticalSwap`) — laterally adjacent different-density
+fluids never exchange. Result: a water cell with water above and
+below in a chimney configuration, oil to either side, was a
+stable equilibrium.
+
+### Fix
+
+`detectPools` (FluidPools.ts) now flood-fills 4-connected fluid
+cells regardless of id. The pool tracks per-id mass in a
+`materialMass: Map<number, number>` instead of a single
+`materialId`. `distributePoolMass` walks the row stack
+bottom-up, allocating each row to the heaviest fluid that still
+has remaining mass, then advancing to the next-lighter at row
+boundaries. Pure rows use uniform within-row mass (preserving
+the v3.1.8 single-fluid surface profile); a single transition
+row at a fluid-to-fluid boundary uses whole-cell allocation
+(saturated cells of the heavier fluid, then saturated cells of
+the lighter — within-row id is non-uniform but mass conserves
+exactly per id).
+
+A `MASS_DRIFT_EPS = 1e-5` tolerance on the "fluid exhausted"
+check prevents float32 drift on water mass (a 60-cell pool
+accumulates ~3e-7 of phantom water through repeated
+`stableSplit` calls) from stealing surface rows that should
+host the lighter fluid — without it, a row of oil at the top
+of water gets overwritten with water at mass ~1e-7 and the
+oil mass leaks into the leftover branch.
+
+### Files affected
+
+- `src/core/algorithms/FluidPools.ts` — multi-fluid pool shape,
+  rank-aware distribute.
+- `src/core/algorithms/CellularAutomaton.ts` — distribute call
+  signature now passes `materials`.
+- `tests/core/algorithms/FluidPools.test.ts` — "does not merge"
+  test inverted to "merges into one pool".
+- `tests/core/algorithms/CellularAutomaton.test.ts` — added
+  oil-surfaces / oil-island / chimney-heal tests.
+
+### Behavior verified
+
+- Oil island inside a water body rises to the top within depth
+  ticks.
+- Oil dropped on a water surface spreads to cover the entire
+  pool's surface within ~width ticks.
+- Water poured onto an oil pool sinks; oil reforms a flat
+  layer above the water, healing the chimney within a few
+  ticks of pool detection.
+- Mixed oil + water columns of the wrong order (oil-bottom +
+  water-top) flip in a few ticks.
+- 380 unit tests pass; typecheck + lint clean.
 
 ---
 

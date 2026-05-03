@@ -170,7 +170,7 @@ export function step(bitmap: ChunkedBitmap, tick = 0): void {
         const pools = detectPools(bitmap, materials);
         for (const pool of pools.values()) {
             if (pool.cells.size >= POOL_MIN_SIZE) {
-                distributePoolMass(bitmap, pool);
+                distributePoolMass(bitmap, pool, materials);
             }
         }
         poolIds = bitmap._getPoolIdsUnchecked();
