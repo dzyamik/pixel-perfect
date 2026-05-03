@@ -449,28 +449,36 @@ class FallingSandScene extends Phaser.Scene {
                 const dx = x - cx;
                 const dy = y - cy;
                 if (dx * dx + dy * dy > r2) continue;
-                if (bm.getPixel(x, y) !== 0) continue;
-                // v3.1.24: deposit fluid AT the cursor at saturated
-                // mass (1.0 — `setPixel` default). Earlier attempts
-                // tried `setMass(0.5)` plus a walk-down or whole-
-                // column stream; both interacted badly with the
-                // unified-pool `distributePoolMass`. Pool mass below
-                // pool capacity makes distribute saturate the
-                // bottom rows and demote the top rows to air —
-                // "air appears not from the brush but from the
-                // ground" (the painted column flickers air/water
-                // each tick as the brush refills cells distribute
-                // just relocated). Saturated cells (mass 1.0)
-                // can't be compressed further, so distribute
-                // leaves them in place. Per-cell `stepLiquid`
-                // handles the natural fall via compression-aware
-                // `stableSplit`: the topmost falling cell stays
-                // ~0.98 mass each tick (small flow into the cell
-                // below) so the user sees a continuous column
-                // from the cursor down rather than a gap pattern.
+                // v3.1.25: fluid brush deposits a continuous stream
+                // from the cursor down to the first non-fluid cell,
+                // every cell at saturated mass (1.0) and ALWAYS
+                // overwriting (no air-only check). The cursor-only
+                // saturated brush from v3.1.24 hid the air-at-top
+                // flicker but the falling column below the brush
+                // showed a gap pattern: source mass=1.0, target air
+                // = 0, `stableSplit(1.0) = 1.0` means full transfer,
+                // source evaporates, gap "falls" toward the surface
+                // each tick. Stream-overwrite pre-fills every cell
+                // in the column at 1.0 each tick — cell-to-cell
+                // transfers are then compression-aware (both cells
+                // at 1.0 → `stableSplit(2.0) ≈ 1.02`, tiny flow), so
+                // the column stays solid as long as the brush is
+                // held. Stops at the first non-air, non-same-fluid
+                // cell so the stream doesn't punch through stone /
+                // wood / a denser fluid pool. For non-fluid
+                // materials (sand / wood / fire) keep the air-only
+                // check so dragging the brush over a sand pile
+                // doesn't stamp duplicate sand grains.
                 if (isFluid) {
-                    bm.setPixel(x, y, materialId);
+                    let py = y;
+                    while (py < HEIGHT) {
+                        const id = bm.getPixel(x, py);
+                        if (id !== 0 && id !== materialId) break;
+                        bm.setMass(x, py, 1.0, materialId);
+                        py += 1;
+                    }
                 } else {
+                    if (bm.getPixel(x, y) !== 0) continue;
                     bm.setPixel(x, y, materialId);
                 }
             }
