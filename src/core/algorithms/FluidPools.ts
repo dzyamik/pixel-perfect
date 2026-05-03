@@ -810,6 +810,40 @@ function liftGasPool(
     if (gasCells.length === 0) return;
     gasCells.sort((a, b) => a - b);
 
+    // Helper: can `(tx, ty)` accept a swap from a gas cell?
+    // True for air (id=0) or any non-static, non-same-gas fluid.
+    const canSwapInto = (tx: number, ty: number, gasId: number): boolean => {
+        if (tx < 0 || tx >= W || ty < 0) return false;
+        const tid = bitmap._readIdUnchecked(tx, ty);
+        if (tid === gasId) return false;
+        if (tid === 0) return true;
+        const tmat = materials.get(tid);
+        if (tmat === undefined) return false;
+        if (tmat.simulation === undefined || tmat.simulation === 'static') return false;
+        return true;
+    };
+
+    // Helper: do the actual swap of gas at `(x, y)` with the cell
+    // at `(tx, ty)`. Tags both cells with the pool id so adjacent
+    // fluid cells in the per-cell pass see them as bubble cells
+    // and don't laterally donate in (re-unifying the pool would
+    // otherwise let `distributePoolMass` undo the lift).
+    const swapWith = (x: number, y: number, tx: number, ty: number,
+                       idx: number, gasId: number): void => {
+        const targetIdx = ty * W + tx;
+        const tid = bitmap._readIdUnchecked(tx, ty);
+        const gasMass = masses[idx]!;
+        const tMass = tid === 0 ? 0 : masses[targetIdx]!;
+        bitmap._writeIdUnchecked(tx, ty, gasId);
+        masses[targetIdx] = gasMass;
+        bitmap._markCellChanged(tx, ty, true);
+        bitmap._writeIdUnchecked(x, y, tid);
+        masses[idx] = tMass;
+        bitmap._markCellChanged(x, y, true);
+        poolIds[targetIdx] = pool.id;
+        // poolIds[idx] stays at pool.id (kept tagged).
+    };
+
     for (const idx of gasCells) {
         const y = (idx / W) | 0;
         if (y === 0) continue;
@@ -818,41 +852,25 @@ function liftGasPool(
         // pass (cascade chain). Skip if no longer gas.
         const id = bitmap._readIdUnchecked(x, y);
         if (id === 0) continue;
-        const upIdx = idx - W;
-        const upId = bitmap._readIdUnchecked(x, y - 1);
-        // Same-gas above: leave to mass-transfer / cascade. Static
-        // (stone, settled-sand, wood etc.) or unknown id: blocked.
-        if (upId === id) continue;
-        if (upId !== 0) {
-            const upMat = materials.get(upId);
-            if (upMat === undefined) continue;
-            if (upMat.simulation === undefined || upMat.simulation === 'static') continue;
+        // First try straight up.
+        if (canSwapInto(x, y - 1, id)) {
+            swapWith(x, y, x, y - 1, idx, id);
+            continue;
         }
-        // Swap. Up cell receives gas; this cell receives whatever
-        // was above (air, fire, oil, water — all heavier than gas).
-        const gasMass = masses[idx]!;
-        const upMass = upId === 0 ? 0 : masses[upIdx]!;
-        bitmap._writeIdUnchecked(x, y - 1, id);
-        masses[upIdx] = gasMass;
-        bitmap._markCellChanged(x, y - 1, true);
-        bitmap._writeIdUnchecked(x, y, upId);
-        masses[idx] = upMass;
-        bitmap._markCellChanged(x, y, true);
-        // Move the pool's tag with the gas: the new gas position
-        // joins the pool. KEEP the old position tagged with the
-        // pool id too — `stepLiquid`'s `isBubbleAt` check then
-        // sees the just-vacated air cell as an enclosed bubble
-        // and skips lateral / vertical donation into it. Without
-        // that, adjacent water cells laterally spread into the
-        // air cell within a tick, re-unifying the gas pool with
-        // the water pool, and `distributePoolMass` then moves
-        // gas back down to the unified pool's surface row,
-        // canceling the lift. The next tick's `detectAirBubbles`
-        // also re-tags this air cell on its own (it's enclosed
-        // by gas + water + walls), but tagging now prevents any
-        // damage during this tick's per-cell pass.
-        poolIds[upIdx] = pool.id;
-        // poolIds[idx] stays at pool.id (no clear).
+        // v3.1.29: blocked by static / same-gas above. Try diagonal
+        // up-left and up-right so the gas can slide around an
+        // overhang or angled wall (the demo 09 funnel narrows as
+        // gas rises, edge cells would otherwise pin against the
+        // angled stone walls indefinitely). Alternate the side
+        // tried first by row parity for L/R symmetry.
+        const tryLeftFirst = (y & 1) === 0;
+        const sides = tryLeftFirst ? [-1, 1] : [1, -1];
+        for (const sx of sides) {
+            if (canSwapInto(x + sx, y - 1, id)) {
+                swapWith(x, y, x + sx, y - 1, idx, id);
+                break;
+            }
+        }
     }
 }
 
