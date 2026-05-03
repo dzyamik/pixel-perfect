@@ -2,7 +2,7 @@
 
 Running ledger of what's done, what's in flight, and what's broken. Read alongside `CLAUDE.md` and `02-roadmap.md` to catch up at the start of a session.
 
-> Last updated: 2026-05-03, v3.1.20 gas correctness + drift-eps in transition row (backlog item #3 closed)
+> Last updated: 2026-05-03, v3.1.21 distribute-lift for stuck bubbles (backlog item #2 closed)
 
 ---
 
@@ -33,13 +33,18 @@ later passes can pick the right ones to address:
    bubble in one tick. Bubbles surface at an open-air boundary
    and pop; sealed-top containers trap them at the top row.
 
-2. **Air displacement when fluid falls into a sealed cavity.**
-   Pour water into a closed-top container with an air-filled
-   bottom chamber connected by a narrow neck. Real physics:
-   water enters, air bubbles out the neck (or stays trapped at
-   pressure). Today: water just stops at the surface of the air
-   pocket (since the cavity contains air not water, the pool
-   detection treats it as a separate region). Linked to (1).
+2. **Air displacement when fluid falls into a sealed cavity.** ✅
+   Closed by `v3.1.21`. The v3.1.19 per-tick lift only swaps
+   straight up — bubbles trapped under a stone overhang (e.g.
+   in a vase / U-shape with a partial lid) couldn't escape
+   sideways toward an open neck. `distributePoolMass` now
+   includes "stuck" bubble cells (those whose up-neighbor is
+   NOT a pool fluid cell) in its row footprint, and the bottom-
+   up fluid allocation overwrites them with water while creating
+   air at the topmost rows of the pool. Bubbles trapped under
+   overhangs teleport to the connected pool's surface in one
+   tick of pool detection. Free bubbles (with fluid above) keep
+   the per-tick 1-row animation rate so the rise stays visible.
 
 3. **Air vs gas at boundaries.** ✅ Closed by `v3.1.20`. Two
    bugs surfaced when verifying gas behaviour: (a) the multi-
@@ -133,10 +138,73 @@ fluid-feature passes when relevant.
 | v3.1.18 — napalm material (flammable oil) | ✅ done | `v3.1.18` |
 | v3.1.19 — enclosed air bubbles rise + pop at surface | ✅ done | `v3.1.19` |
 | v3.1.20 — gas correctness in unified pool + transition-row drift | ✅ done | `v3.1.20` |
+| v3.1.21 — distribute-lift for stuck bubbles (overhang / cavity) | ✅ done | `v3.1.21` |
 | v3.1.x — incremental pool maintenance (phase 3) | ⬜ deferred | — |
 | v3.2.x — air handling (remaining backlog items) | ⬜ backlog | — |
 
 Test suite: 381 tests across 22 files. typecheck and lint clean.
+
+---
+
+## v3.1.21 — distribute-lift for stuck bubbles (2026-05-03)
+
+Closes the second item in the air-iteration backlog. Air pockets
+trapped under a stone overhang now find their way to the
+connected pool's surface, so a vase / cavity / U-shape filled
+from above doesn't leave a dead air pocket below.
+
+### Mechanism
+
+The v3.1.19 per-tick lift only swaps straight up. When a bubble
+cell's up-neighbor is NOT a pool fluid cell (stone or
+out-of-bounds), the swap is rejected and the bubble is "stuck."
+v3.1.21 routes those stuck cells through `distributePoolMass`:
+when a pool's `airCells` set contains stuck cells, distribute
+adds them to the row footprint, the bottom-up fluid allocation
+overwrites them with water (saturated), and the topmost rows of
+the pool's footprint that the fluid mass doesn't reach end up
+as air via the existing "no fluid left" branch — effectively
+relocating the bubble to the pool surface in one tick.
+
+Free bubble cells (those with a pool fluid cell directly above)
+are excluded from distribute's footprint. They continue to rise
+1 row per tick via `liftAirBubbles`, preserving the visible
+rising-bubble animation that v3.1.19 introduced.
+
+`liftAirBubbles` also gains a guard: skip the swap if the
+bubble cell is no longer air. distribute may have already
+relocated it, and a duplicate swap would stamp a phantom air
+cell on the bubble's old up-neighbor.
+
+The single-fluid surface-row branch in distribute (uniform
+mass for smooth surfaces) is now disabled when the pool has
+stuck bubbles. Whole-cell allocation is required so leftover
+cells become air rather than getting smeared with thin fluid
+mass that erases the bubble visually.
+
+### Files affected
+
+- `src/core/algorithms/FluidPools.ts` — `distributePoolMass`
+  builds `cellsByY` from pool.cells + stuck airCells; tracks
+  `hasAirBubbles` to gate the surface-row branch; reads
+  `poolIds` to filter free vs stuck bubble cells.
+  `liftAirBubbles` skips already-fluid airCells.
+- `tests/core/algorithms/CellularAutomaton.test.ts` — new test
+  for an under-overhang bubble (3 cells under a partial stone
+  lid) that surfaces in one tick.
+
+### Behavior verified
+
+- Open-top container with bubble in middle of water: rises 1
+  row per tick (v3.1.19 animation preserved).
+- Sealed-top container with bubble: rises 1 row/tick, pins
+  under the lid.
+- Vase / cavity with overhang: bubble teleports to top of pool
+  in one tick.
+- Pour water into a vase shape with air-filled bottom: water
+  fills the bottom completely; air migrates up through the
+  pool to surface in the upper chamber.
+- 387 unit tests pass; typecheck + lint clean.
 
 ---
 

@@ -1807,6 +1807,61 @@ describe('CellularAutomaton.step — enclosed air bubbles rise (v3.1.19)', () =>
     });
 });
 
+describe('CellularAutomaton.step — air displacement under overhang (v3.1.21)', () => {
+    // v3.1.21: bubbles stuck under an overhang (cell above is NOT
+    // a pool fluid) can't rise via the v3.1.19 per-tick lift —
+    // its check `poolIds[upIdx] === pool.id` rejects the swap.
+    // Distribute now treats those stuck bubble cells as part of
+    // the pool footprint, so the bottom-up fluid allocation
+    // overwrites them with fluid and creates air at the topmost
+    // rows of the pool. The 8-cell bubble below an overhang
+    // teleports to the surface in one tick of pool detection.
+
+    it('bubble under stone overhang surfaces to top of pool', () => {
+        // U-shape with a partial lid: stone overhang covers cols 1-3
+        // at row 5 (mid-height). Bubble carved at row 6 cols 1-3 —
+        // its up-neighbors are stone, so per-tick lift is blocked.
+        // Fluid above the overhang should NOT be a separate pool;
+        // we leave a gap in the overhang at col 4..7 so the pool
+        // is connected.
+        const W = 10;
+        const H = 12;
+        const bm = new ChunkedBitmap({
+            width: W, height: H, chunkSize: 1,
+            materials: [water, stone],
+        });
+        for (let x = 0; x < W; x++) bm.setPixel(x, H - 1, stone.id);
+        for (let y = 0; y < H; y++) {
+            bm.setPixel(0, y, stone.id);
+            bm.setPixel(W - 1, y, stone.id);
+        }
+        // Partial overhang at row 5, cols 1-3.
+        for (let x = 1; x <= 3; x++) bm.setPixel(x, 5, stone.id);
+        // Water fills the rest of the interior.
+        for (let y = 1; y < H - 1; y++) {
+            for (let x = 1; x < W - 1; x++) {
+                if (bm.getPixel(x, y) === 0) bm.setPixel(x, y, water.id);
+            }
+        }
+        // Carve bubble at row 6 cols 1-3 (directly under the overhang).
+        for (let x = 1; x <= 3; x++) bm.setPixel(x, 6, 0);
+        CellularAutomaton.step(bm, 0);
+        // After one tick, those bubble cells have been replaced
+        // with water (distribute relocated the bubble). Air ends up
+        // at the top row of the pool.
+        for (let x = 1; x <= 3; x++) {
+            expect(bm.getPixel(x, 6)).toBe(water.id);
+        }
+        // 3 air cells should now exist somewhere in the pool's top
+        // row (row 1, since the open-top-water-pool surface is row 1).
+        let airAtTop = 0;
+        for (let x = 1; x < W - 1; x++) {
+            if (bm.getPixel(x, 1) === 0) airAtTop += 1;
+        }
+        expect(airAtTop).toBe(3);
+    });
+});
+
 describe('CellularAutomaton.step — gas in unified pools (v3.1.20)', () => {
     // v3.1.20: gas (rank 0, lighter than air rank 1) is part of the
     // unified multi-fluid pool sort, so a gas bubble in water rises

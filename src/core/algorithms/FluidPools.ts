@@ -185,6 +185,15 @@ export function distributePoolMass(
     const W = bitmap.width;
 
     // Group cells by y, then sort y values descending (bottom first).
+    // v3.1.21: include "stuck" enclosed-air-bubble cells in the row
+    // footprint so distribute can relocate bubbles past overhangs
+    // the per-tick `liftAirBubbles` rule can't navigate. A bubble
+    // cell is stuck when its up-neighbor is NOT a pool fluid cell
+    // (stone or out-of-bounds) — `liftAirBubbles` then can't swap
+    // upward. For unstuck bubbles (fluid or another bubble cell
+    // directly above), keep the per-tick 1-row animation by
+    // EXCLUDING them from distribute's footprint.
+    const poolIds = bitmap._getPoolIdsUnchecked();
     const cellsByY = new Map<number, number[]>();
     for (const idx of pool.cells) {
         const y = (idx / W) | 0;
@@ -194,6 +203,23 @@ export function distributePoolMass(
             cellsByY.set(y, row);
         }
         row.push(idx);
+    }
+    let hasAirBubbles = false;
+    for (const idx of pool.airCells) {
+        const y = (idx / W) | 0;
+        // Skip bubble cells that can rise via the per-tick lift.
+        if (y > 0) {
+            const upIdx = idx - W;
+            if (poolIds[upIdx] === pool.id) continue;
+        }
+        // Stuck — include in distribute.
+        let row = cellsByY.get(y);
+        if (row === undefined) {
+            row = [];
+            cellsByY.set(y, row);
+        }
+        row.push(idx);
+        hasAirBubbles = true;
     }
     const ys = [...cellsByY.keys()].sort((a, b) => b - a);
 
@@ -286,10 +312,14 @@ export function distributePoolMass(
                 }
                 remaining.set(activeId, remainingForActive - capacityLeft);
                 cellsAssigned = rowCellCount;
-            } else if (!hasMoreFluidAfter(fluidIdx)) {
+            } else if (!hasMoreFluidAfter(fluidIdx) && !hasAirBubbles) {
                 // Single-fluid surface row — distribute remaining
                 // mass uniformly (smooth visible surface). Matches
                 // pre-v3.1.17 behavior for single-fluid pools.
+                // Skipped when the pool has air bubbles: those need
+                // whole-cell allocation so leftover cells become air
+                // rather than getting smeared with thin fluid mass
+                // (which would erase the bubble visually).
                 const perCell = remainingForActive / cellsLeft;
                 for (let i = cellsAssigned; i < rowCellCount; i++) {
                     assignCell(rowCells[i]!, activeId, perCell);
@@ -673,6 +703,12 @@ function liftAirBubbles(
         const y = (idx / W) | 0;
         if (y === 0) continue;
         const x = idx - y * W;
+        // v3.1.21: distribute may have already overwritten this
+        // bubble cell with fluid (when the pool's distribute pass
+        // relocated the bubble to the top of the pool footprint).
+        // Skip the lift in that case so we don't double-move the
+        // bubble or stamp an extra air cell on its old neighbor.
+        if (bitmap._readIdUnchecked(x, y) !== 0) continue;
         const upIdx = idx - W;
         if (poolIds[upIdx] !== pool.id) continue;
         const upId = bitmap._readIdUnchecked(x, y - 1);

@@ -486,11 +486,15 @@ water chimney through oil heals within a tick of pool detection),
 tagged in the pool-id sidecar so per-cell donations don't fill
 them; a per-tick lift pass swaps each bubble cell with the
 fluid cell directly above, so bubbles rise one row per tick
-and pop at the first open-air boundary), and `v3.1.20` (gas
+and pop at the first open-air boundary), `v3.1.20` (gas
 correctness in unified pools: bubble lift only fires when the
 up cell is heavier than air, and the multi-fluid transition
 row uses `MASS_DRIFT_EPS` so float drift doesn't allocate a
-spurious partial-cell that steals the lighter fluid's slot).
+spurious partial-cell that steals the lighter fluid's slot),
+and `v3.1.21` (distribute-lift for stuck bubbles: cells trapped
+under a stone overhang — whose up-neighbor is NOT a pool fluid
+cell — are routed through `distributePoolMass`, which relocates
+them to the topmost rows of the pool footprint in one tick).
 v3 details in `docs-dev/06-v3-mass-based-fluid.md`,
 `docs-dev/07-v3.1-pool-based-fluid.md`, and the running ledger in
 `docs-dev/PROGRESS.md`.
